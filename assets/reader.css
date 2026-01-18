@@ -1,0 +1,18 @@
+html, body {
+    margin: 0; padding: 0;
+    width: 100vw; height: 100vh;
+    overflow: hidden;
+    background-color: #fff;
+    /* Pagination */
+    column-width: 100vw;
+    column-gap: 0;
+    column-fill: auto;
+}
+body { font-family: 'Georgia', serif; font-size: 18px; line-height: 1.6; color: #333; }
+img {
+    max-width: 100% !important;
+    max-height: 95vh !important;
+    width: auto !important; height: auto !important;
+    display: block; margin: 0 auto;
+    break-inside: avoid;
+}

@@ -1,4 +1,14 @@
 (function() {
+    // 1. FORCE START AT PAGE 1
+    // This runs immediately when the chapter loads
+    if (window.scrollTo) {
+        window.scrollTo(0, 0);
+    }
+    // Also try resetting body/html just in case
+    if (document.body) document.body.scrollLeft = 0;
+    if (document.documentElement) document.documentElement.scrollLeft = 0;
+
+    // 2. WAIT FOR BODY (Prevent Crash)
     function checkReady() {
         if (document.body) {
             initializeReader();
@@ -9,13 +19,11 @@
     checkReady();
 
     function initializeReader() {
-        // --- VISIBLE DEBUGGER ---
+        // --- VISIBLE DEBUGGER (Keep this until perfect) ---
         const debug = document.createElement('div');
         debug.style.cssText = "position:fixed; bottom:10px; left:10px; background:rgba(0,0,0,0.8); color:#00ff00; padding:8px; z-index:9999; font-size:14px; font-family:monospace; pointer-events:none; border-radius:4px;";
         document.body.appendChild(debug);
 
-        // HELPER: Get the REAL scroll position
-        // Since we scroll the BODY, we must read body.scrollLeft, NOT window.scrollX
         function getScrollPos() {
             return Math.ceil(document.body.scrollLeft);
         }
@@ -37,7 +45,7 @@
             debug.innerText = `Pg:${pages} | Pos:${current}/${max} | End:${atEnd}`;
         }
 
-        // LISTEN EVERYWHERE (Use Capture to force detection)
+        // LISTEN EVERYWHERE
         window.addEventListener('scroll', updateDebug, true);
         document.body.addEventListener('scroll', updateDebug, true);
         window.addEventListener('resize', updateDebug);
@@ -50,7 +58,6 @@
 
         document.addEventListener('touchstart', (e) => {
             startX = e.changedTouches[0].screenX;
-            // Capture Start Position from BODY
             startScrollPos = getScrollPos();
         }, { passive: true });
 

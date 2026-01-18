@@ -5,26 +5,31 @@ html {
     width: 100%;
     margin: 0;
     padding: 0;
-    overflow: hidden; /* Lock the Window */
+    overflow: hidden; 
     background-color: #FFFFFF;
 }
 
 body {
-    /* BODY IS THE SCROLL CONTAINER */
+    /* SCROLL CONTAINER */
     width: 100vw !important;
     height: 100vh !important;
     margin: 0;
     padding: 0 !important;
     
+    /* SCROLL SETUP */
     overflow-x: scroll !important;
     overflow-y: hidden !important;
     
+    /* COLUMNS */
     column-width: 100vw;
     column-gap: 0;
     column-fill: auto;
     
+    /* SNAP CONTAINER SETUP */
     scroll-snap-type: x mandatory;
-    scroll-snap-stop: always;
+    
+    /* PREVENTS BOUNCING/CHAINING */
+    overscroll-behavior-x: none;
     
     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
     font-size: 1.25em;
@@ -39,11 +44,18 @@ body {
     transition: transform 0.3s ease-out, opacity 0.3s ease-out;
 }
 
-/* CONTENT PADDING */
+/* --- THE SNAP FIX --- */
+/* scroll-snap-stop must be on the CHILDREN, not the body */
 p, h1, h2, h3, h4, h5, h6, li, div {
     margin: 0;
     padding: 20px 20px 0 20px; 
+    
     scroll-snap-align: start;
+    
+    /* THIS IS THE BRAKE */
+    /* It forces the scroll to stop at this element, preventing skipping */
+    scroll-snap-stop: always; 
+    
     max-width: 100%;
 }
 
@@ -52,6 +64,8 @@ table, pre, code {
     max-width: 100%;
     white-space: pre-wrap; 
     overflow-x: hidden;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
 }
 
 /* IMAGE FIT */
@@ -61,8 +75,10 @@ img {
     display: block;
     margin: 0 auto;
     padding: 10px;
-    scroll-snap-align: start;
     object-fit: contain;
+    
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
 }
 
 ::-webkit-scrollbar { display: none; width: 0; }

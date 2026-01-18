@@ -5,53 +5,58 @@ html {
     width: 100%;
     margin: 0;
     padding: 0;
-    overflow: hidden; /* HTML is the frame */
+    overflow: hidden; /* Lock the Window */
     background-color: #FFFFFF;
 }
 
 body {
-    /* 1. SCROLL WINDOW SETUP */
-    /* Body must be the size of the SCREEN, not the content */
+    /* BODY IS THE SCROLL CONTAINER */
     width: 100vw !important;
     height: 100vh !important;
-    
     margin: 0;
+    padding: 0 !important;
     
-    /* 2. ENABLE SCROLLING */
-    /* Content (columns) will spill out to the right, triggering scroll */
     overflow-x: scroll !important;
     overflow-y: hidden !important;
     
-    /* 3. COLUMNS */
     column-width: 100vw;
     column-gap: 0;
     column-fill: auto;
     
-    /* 4. SNAP PHYSICS */
     scroll-snap-type: x mandatory;
     scroll-snap-stop: always;
-    
-    /* 5. PADDING (Zero on body to fix alignment) */
-    padding: 0 !important;
-    
-    transition: transform 0.3s ease-out, opacity 0.3s ease-out;
     
     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
     font-size: 1.25em;
     line-height: 1.6;
     color: #1a1a1a;
+    
+    /* SAFETY: Prevent 400 page explosion */
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+    word-break: break-word;
+    
+    transition: transform 0.3s ease-out, opacity 0.3s ease-out;
 }
 
-/* TEXT PADDING */
+/* CONTENT PADDING */
 p, h1, h2, h3, h4, h5, h6, li, div {
     margin: 0;
     padding: 20px 20px 0 20px; 
     scroll-snap-align: start;
+    max-width: 100%;
 }
 
-/* IMAGE FIX */
+/* TABLES / CODE SAFETY */
+table, pre, code {
+    max-width: 100%;
+    white-space: pre-wrap; 
+    overflow-x: hidden;
+}
+
+/* IMAGE FIT */
 img {
-    max-width: 100%; /* Fits inside the column */
+    max-width: 100%; 
     max-height: 85vh;
     display: block;
     margin: 0 auto;

@@ -1,45 +1,63 @@
+* { box-sizing: border-box; }
+
 html {
     height: 100%;
     width: 100%;
-    /* Clips the massive body so it fits the screen */
-    overflow: hidden; 
+    margin: 0;
+    padding: 0;
+    overflow: hidden; /* HTML is the frame */
     background-color: #FFFFFF;
 }
 
 body {
-    margin: 0;
-    height: 100%;
-    width: 100%;
+    /* 1. SCROLL WINDOW SETUP */
+    /* Body must be the size of the SCREEN, not the content */
+    width: 100vw !important;
+    height: 100vh !important;
     
-    /* COLUMN LOGIC: Turns text into a long horizontal strip */
+    margin: 0;
+    
+    /* 2. ENABLE SCROLLING */
+    /* Content (columns) will spill out to the right, triggering scroll */
+    overflow-x: scroll !important;
+    overflow-y: hidden !important;
+    
+    /* 3. COLUMNS */
     column-width: 100vw;
-    column-gap: 0px;
+    column-gap: 0;
     column-fill: auto;
     
-    /* THE SLIDE ENGINE: */
-    /* We will change 'transform' with JS to move the page */
-    /* ease-out makes it feel responsive */
-    transition: transform 0.3s ease-out; 
+    /* 4. SNAP PHYSICS */
+    scroll-snap-type: x mandatory;
+    scroll-snap-stop: always;
     
-    /* Padding for text */
-    padding: 20px;
-    box-sizing: border-box;
+    /* 5. PADDING (Zero on body to fix alignment) */
+    padding: 0 !important;
     
-    /* Typography */
+    transition: transform 0.3s ease-out, opacity 0.3s ease-out;
+    
     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-    font-size: 1.2em;
+    font-size: 1.25em;
     line-height: 1.6;
     color: #1a1a1a;
 }
 
-/* Image scaling */
-img, svg, image {
-    max-width: 100% !important;
-    max-height: 85vh !important;
-    height: auto !important;
-    width: auto !important;
-    object-fit: contain;
-    display: block;
-    margin: 10px auto;
-    break-inside: avoid;
+/* TEXT PADDING */
+p, h1, h2, h3, h4, h5, h6, li, div {
+    margin: 0;
+    padding: 20px 20px 0 20px; 
+    scroll-snap-align: start;
 }
+
+/* IMAGE FIX */
+img {
+    max-width: 100%; /* Fits inside the column */
+    max-height: 85vh;
+    display: block;
+    margin: 0 auto;
+    padding: 10px;
+    scroll-snap-align: start;
+    object-fit: contain;
+}
+
+::-webkit-scrollbar { display: none; width: 0; }

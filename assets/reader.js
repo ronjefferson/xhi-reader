@@ -1,51 +1,56 @@
-// STATE
-let currentPage = 0;
+window.addEventListener('DOMContentLoaded', () => {
 
-// SETUP (Reset on load)
-function setup() {
-    currentPage = 0;
-    updateView();
-}
-// Run setup when content loads
-setup();
-setTimeout(setup, 300); // Safety check for images
+    let startX = 0;
+    let startScrollPos = 0;
+    let isAnimating = false;
 
+    document.addEventListener('touchstart', (e) => {
+        startX = e.changedTouches[0].screenX;
+        startScrollPos = window.scrollX;
+    }, { passive: true });
 
-// --- THE API (Called by Flutter) ---
+    document.addEventListener('touchend', (e) => {
+        if (isAnimating) return;
 
-// Returns: 'success' if moved, 'edge' if at the limit
-function tryTurnPage(direction) {
-    // 1. Recalculate dimensions (Crucial for accuracy)
-    const contentWidth = document.body.scrollWidth;
-    const screenWidth = window.innerWidth;
-    
-    // Use -2px buffer to handle sub-pixel rendering issues
-    const totalPages = Math.ceil((contentWidth - 2) / screenWidth);
-    
-    // Calculate Target
-    const nextPage = currentPage + direction;
+        const endX = e.changedTouches[0].screenX;
+        const diff = startX - endX; // +Val = Swipe Left (Next), -Val = Swipe Right (Prev)
+        
+        // 1. GET MEASUREMENTS
+        // Use scrollWidth. If content fits perfectly, scrollWidth == clientWidth.
+        const totalWidth = document.body.scrollWidth; 
+        const clientWidth = window.innerWidth;
+        const maxScroll = totalWidth - clientWidth;
+        
+        // 2. CHECK POSITIONS (With 5px Buffer)
+        // If maxScroll is 0 (Single page), both Start and End are TRUE.
+        const isAtStart = startScrollPos <= 5;
+        const isAtEnd = startScrollPos >= (maxScroll - 5);
 
-    // --- BOUNDARY CHECKS ---
-    
-    // A. PREV Edge (Start of Chapter)
-    if (nextPage < 0) {
-        // We are at the start, tell Flutter to handle "Previous Chapter"
-        return 'edge_prev';
+        // 3. CHAPTER NAVIGATION LOGIC
+        
+        // NEXT CHAPTER:
+        // User swiped Left (>50px) AND we started at the physical end.
+        if (diff > 50 && isAtEnd) {
+            animateAndExit('next');
+        }
+        
+        // PREV CHAPTER:
+        // User swiped Right (<-50px) AND we started at the physical start.
+        else if (diff < -50 && isAtStart) {
+            animateAndExit('prev');
+        }
+    });
+
+    function animateAndExit(direction) {
+        isAnimating = true;
+        if (direction === 'next') {
+            document.body.style.transform = "translateX(-100vw)";
+            document.body.style.opacity = "0";
+            setTimeout(() => { if (window.PrintReader) window.PrintReader.postMessage('next_chapter'); }, 300);
+        } else {
+            document.body.style.transform = "translateX(100vw)";
+            document.body.style.opacity = "0";
+            setTimeout(() => { if (window.PrintReader) window.PrintReader.postMessage('prev_chapter'); }, 300);
+        }
     }
-    
-    // B. NEXT Edge (End of Chapter)
-    if (nextPage >= totalPages) {
-        // We are at the end, tell Flutter to handle "Next Chapter"
-        return 'edge_next';
-    }
-
-    // --- EXECUTE SLIDE ---
-    currentPage = nextPage;
-    updateView();
-    return 'success';
-}
-
-function updateView() {
-    const translateAmount = -(currentPage * 100);
-    document.body.style.transform = `translateX(${translateAmount}vw)`;
-}
+});

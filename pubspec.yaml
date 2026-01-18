@@ -116,6 +116,5 @@ flutter:
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
   assets:
-    - assets/reader_template.html
     - assets/reader.js
     - assets/reader.css

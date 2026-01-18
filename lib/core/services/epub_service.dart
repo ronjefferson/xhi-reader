@@ -24,7 +24,6 @@ class EpubService {
     await _copyAssetsToStorage(appDocPath);
 
     // 2. STATIC HANDLER: Serve the AppDocPath (where books AND templates are)
-    // defaultDocument is index.html, though we usually request specific chapters
     var staticHandler = createStaticHandler(
       appDocPath,
       defaultDocument: 'index.html',
@@ -48,11 +47,10 @@ class EpubService {
               );
 
               // --- INJECTION PAYLOAD ---
-              // 1. Viewport: Critical for 100vw to match screen width on mobile
-              // 2. CSS: Handles the layout (Sliding columns)
-              // 3. JS: Handles the logic (Touch gestures & Slide animation)
+              // 1. Viewport: CRITICAL. width=device-width ensures 100vw = screen width.
+              // 2. CSS/JS: Links to your assets.
               const String tagsToInject = '''
-            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+            <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
             <link rel="stylesheet" href="/reader.css">
             <script src="/reader.js"></script>
           ''';
@@ -77,7 +75,7 @@ class EpubService {
               );
             }
 
-            // For non-HTML files (images, css), allow CORS just in case
+            // Allow CORS just in case
             return response.change(
               headers: {
                 'Access-Control-Allow-Origin': '*',
@@ -88,7 +86,6 @@ class EpubService {
         })
         .addHandler(staticHandler);
 
-    // Bind to all interfaces (0.0.0.0) so the WebView can reach it via localhost
     _server = await shelf_io.serve(pipeline, '0.0.0.0', _port);
   }
 
@@ -110,12 +107,11 @@ class EpubService {
       final jsFile = File('$appDocPath/reader.js');
       await jsFile.writeAsString(jsData);
     } catch (e) {
-      // Log error if assets are missing (ensure they are in pubspec.yaml)
       print("Error copying reader templates: $e");
     }
   }
 
-  // --- STANDARD EPUB PARSING LOGIC ---
+  // --- STANDARD EPUB PARSING ---
   Future<List<String>> getSpineUrls(
     File epubFile,
     String bookId,
@@ -135,7 +131,7 @@ class EpubService {
     final rootFolder = opfData['rootFolder'] as String;
     final spinePaths = opfData['spinePaths'] as List<String>;
 
-    // Generate localhost URLs for the WebView
+    // Generate localhost URLs
     return spinePaths.map((path) {
       final cleanPath = rootFolder.isNotEmpty ? '$rootFolder/$path' : path;
       return 'http://localhost:$_port/books/$bookId/raw/$cleanPath';
@@ -160,7 +156,6 @@ class EpubService {
 
   Future<Map<String, dynamic>?> _parseOpf(Directory rawDir) async {
     try {
-      // 1. Find the .opf file via container.xml
       final containerFile = File('${rawDir.path}/META-INF/container.xml');
       if (!containerFile.existsSync()) return null;
 
@@ -172,13 +167,11 @@ class EpubService {
       final opfFile = File('${rawDir.path}/$opfPath');
       final opfXml = XmlDocument.parse(await opfFile.readAsString());
 
-      // 2. Map IDs to Hrefs (Manifest)
       final manifest = <String, String>{};
       for (var item in opfXml.findAllElements('item')) {
         manifest[item.getAttribute('id')!] = item.getAttribute('href')!;
       }
 
-      // 3. Get Reading Order (Spine)
       final spinePaths = <String>[];
       for (var itemref in opfXml.findAllElements('itemref')) {
         final id = itemref.getAttribute('idref');
@@ -187,7 +180,6 @@ class EpubService {
         }
       }
 
-      // 4. Handle subfolders (if OPF is in OEBPS/)
       String rootFolder = "";
       if (opfPath.contains('/')) rootFolder = p.dirname(opfPath);
 

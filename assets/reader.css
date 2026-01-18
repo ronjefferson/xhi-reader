@@ -1,18 +1,45 @@
-html, body {
-    margin: 0; padding: 0;
-    width: 100vw; height: 100vh;
-    overflow: hidden;
-    background-color: #fff;
-    /* Pagination */
-    column-width: 100vw;
-    column-gap: 0;
-    column-fill: auto;
+html {
+    height: 100%;
+    width: 100%;
+    /* Clips the massive body so it fits the screen */
+    overflow: hidden; 
+    background-color: #FFFFFF;
 }
-body { font-family: 'Georgia', serif; font-size: 18px; line-height: 1.6; color: #333; }
-img {
+
+body {
+    margin: 0;
+    height: 100%;
+    width: 100%;
+    
+    /* COLUMN LOGIC: Turns text into a long horizontal strip */
+    column-width: 100vw;
+    column-gap: 0px;
+    column-fill: auto;
+    
+    /* THE SLIDE ENGINE: */
+    /* We will change 'transform' with JS to move the page */
+    /* ease-out makes it feel responsive */
+    transition: transform 0.3s ease-out; 
+    
+    /* Padding for text */
+    padding: 20px;
+    box-sizing: border-box;
+    
+    /* Typography */
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    font-size: 1.2em;
+    line-height: 1.6;
+    color: #1a1a1a;
+}
+
+/* Image scaling */
+img, svg, image {
     max-width: 100% !important;
-    max-height: 95vh !important;
-    width: auto !important; height: auto !important;
-    display: block; margin: 0 auto;
+    max-height: 85vh !important;
+    height: auto !important;
+    width: auto !important;
+    object-fit: contain;
+    display: block;
+    margin: 10px auto;
     break-inside: avoid;
 }

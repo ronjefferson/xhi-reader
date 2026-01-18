@@ -1,24 +1,51 @@
-console.log("Reader JS");
+// STATE
+let currentPage = 0;
 
-function scrollPage(x) { window.scrollBy({left: x, behavior: 'smooth'}); }
+// SETUP (Reset on load)
+function setup() {
+    currentPage = 0;
+    updateView();
+}
+// Run setup when content loads
+setup();
+setTimeout(setup, 300); // Safety check for images
 
-window.nextPage = function() {
-    if (window.scrollX + window.innerWidth < document.body.scrollWidth - 10) {
-        scrollPage(window.innerWidth);
-    } else {
-        if(window.FlutterChannel) window.FlutterChannel.postMessage("next");
+
+// --- THE API (Called by Flutter) ---
+
+// Returns: 'success' if moved, 'edge' if at the limit
+function tryTurnPage(direction) {
+    // 1. Recalculate dimensions (Crucial for accuracy)
+    const contentWidth = document.body.scrollWidth;
+    const screenWidth = window.innerWidth;
+    
+    // Use -2px buffer to handle sub-pixel rendering issues
+    const totalPages = Math.ceil((contentWidth - 2) / screenWidth);
+    
+    // Calculate Target
+    const nextPage = currentPage + direction;
+
+    // --- BOUNDARY CHECKS ---
+    
+    // A. PREV Edge (Start of Chapter)
+    if (nextPage < 0) {
+        // We are at the start, tell Flutter to handle "Previous Chapter"
+        return 'edge_prev';
     }
-};
-
-window.prevPage = function() {
-    if (window.scrollX > 10) {
-        scrollPage(-window.innerWidth);
-    } else {
-        if(window.FlutterChannel) window.FlutterChannel.postMessage("prev");
+    
+    // B. NEXT Edge (End of Chapter)
+    if (nextPage >= totalPages) {
+        // We are at the end, tell Flutter to handle "Next Chapter"
+        return 'edge_next';
     }
-};
 
-document.addEventListener("click", function(e) {
-    if (e.clientX > window.innerWidth * 0.7) window.nextPage();
-    else if (e.clientX < window.innerWidth * 0.3) window.prevPage();
-});
+    // --- EXECUTE SLIDE ---
+    currentPage = nextPage;
+    updateView();
+    return 'success';
+}
+
+function updateView() {
+    const translateAmount = -(currentPage * 100);
+    document.body.style.transform = `translateX(${translateAmount}vw)`;
+}

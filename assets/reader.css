@@ -10,71 +10,72 @@ html {
 }
 
 body {
-    /* SCROLL CONTAINER */
+    /* 1. THE "SAFE ZONE" CONTAINER */
+    /* We effectively shrink the page so text floats in the middle */
+    /* 100vh - 120px = 60px padding at Top and 60px at Bottom */
+    height: calc(100vh - 120px) !important;
     width: 100vw !important;
-    height: 100vh !important;
-    margin: 0;
+    
+    /* Vertically Center the container */
+    margin-top: 60px;
+    margin-bottom: 60px;
+    margin-left: 0;
+    margin-right: 0;
+    
     padding: 0 !important;
     
-    /* SCROLL SETUP */
-    overflow-x: scroll !important;
-    overflow-y: hidden !important;
-    
-    /* COLUMNS */
+    /* 2. PACKED LAYOUT ENGINE */
     column-width: 100vw;
     column-gap: 0;
-    column-fill: auto;
     
-    /* SNAP CONTAINER SETUP */
+    /* CRITICAL: "auto" fills top-to-bottom efficiently (Packed) */
+    column-fill: auto; 
+    
+    /* 3. SCROLLING */
+    overflow-x: scroll !important;
+    overflow-y: hidden !important; /* Strict vertical lock */
+    
     scroll-snap-type: x mandatory;
+    overscroll-behavior: none;
+    touch-action: pan-x;
     
-    /* PREVENTS BOUNCING/CHAINING */
-    overscroll-behavior-x: none;
-    
+    /* 4. TYPOGRAPHY */
     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-    font-size: 1.25em;
+    font-size: 1.15em;
     line-height: 1.6;
     color: #1a1a1a;
     
-    /* SAFETY: Prevent 400 page explosion */
-    overflow-wrap: break-word;
-    word-wrap: break-word;
-    word-break: break-word;
-    
-    transition: transform 0.3s ease-out, opacity 0.3s ease-out;
+    /* 5. INTERACTIONS */
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: text; /* Allow highlighting */
 }
 
-/* --- THE SNAP FIX --- */
-/* scroll-snap-stop must be on the CHILDREN, not the body */
+/* CONTENT ELEMENTS */
 p, h1, h2, h3, h4, h5, h6, li, div {
-    margin: 0;
-    padding: 20px 20px 0 20px; 
+    /* Standard spacing between paragraphs */
+    margin-top: 0;
+    margin-bottom: 1em;
     
-    scroll-snap-align: start;
+    /* Side Padding only (Top/Bottom is handled by body height) */
+    padding-left: 20px;
+    padding-right: 20px;
     
-    /* THIS IS THE BRAKE */
-    /* It forces the scroll to stop at this element, preventing skipping */
-    scroll-snap-stop: always; 
+    /* PACKING RULES */
+    /* Allow paragraphs to break across columns so we don't have gaps */
+    orphans: 1; 
+    widows: 1;
     
-    max-width: 100%;
-}
-
-/* TABLES / CODE SAFETY */
-table, pre, code {
-    max-width: 100%;
-    white-space: pre-wrap; 
-    overflow-x: hidden;
     scroll-snap-align: start;
     scroll-snap-stop: always;
+    max-width: 100%;
 }
 
-/* IMAGE FIT */
 img {
     max-width: 100%; 
-    max-height: 85vh;
+    /* Ensure images fit inside our shrunken container */
+    max-height: 100%; 
     display: block;
-    margin: 0 auto;
-    padding: 10px;
+    margin: 10px auto;
     object-fit: contain;
     
     scroll-snap-align: start;

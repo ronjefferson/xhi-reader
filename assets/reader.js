@@ -3,108 +3,75 @@
     function checkInitialPosition() {
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('pos') === 'end') {
-            // Scroll to the very end
-            // We set a huge number; browser automatically clamps it to the max
-            document.body.scrollLeft = document.body.scrollWidth + 5000;
-            window.scrollTo(document.body.scrollWidth, 0);
+            document.body.scrollLeft = document.body.scrollWidth;
         } else {
-            // Default to start
             document.body.scrollLeft = 0;
-            window.scrollTo(0, 0);
         }
     }
+    
+    if (document.body) checkInitialPosition();
+    window.onload = checkInitialPosition;
 
-    // 2. WAIT FOR BODY LOOP
-    function checkReady() {
-        if (document.body) {
-            // Run position check immediately when body exists
-            checkInitialPosition();
-            // Run it again shortly after to account for layout/image shifts
-            setTimeout(checkInitialPosition, 50);
-            setTimeout(checkInitialPosition, 200);
+    // 2. TOUCH LOGIC
+    let startX = 0;
+    let startTime = 0;
+    let isSwiping = false;
+
+    document.addEventListener('touchstart', (e) => {
+        startX = e.changedTouches[0].screenX;
+        startTime = new Date().getTime();
+        isSwiping = false;
+    }, { passive: false });
+
+    document.addEventListener('touchmove', (e) => {
+        isSwiping = true;
+    }, { passive: false });
+
+    document.addEventListener('touchend', (e) => {
+        const timeDiff = new Date().getTime() - startTime;
+        const diffX = startX - e.changedTouches[0].screenX;
+
+        // --- TAP DETECTION ---
+        if (!isSwiping && timeDiff < 300) {
+            // Allow Links & Selection
+            if (e.target.closest('a')) return;
+            if (window.getSelection().toString().length > 0) return;
+
+            // Prevent default behavior (Focus/Zoom)
+            if (e.cancelable) e.preventDefault();
             
-            initializeReader();
+            // Toggle UI
+            if (window.PrintReader) window.PrintReader.postMessage('toggle_controls');
+            return;
+        }
+
+        // --- SWIPE NAVIGATION ---
+        if (Math.abs(diffX) > 50) {
+            const total = document.body.scrollWidth;
+            const view = window.innerWidth;
+            const max = total - view;
+            const current = document.body.scrollLeft;
+            
+            const atStart = current <= 10;
+            const atEnd = current >= (max - 10);
+
+            if (diffX > 50 && atEnd) {
+                animate('next');
+            } else if (diffX < -50 && atStart) {
+                animate('prev');
+            }
+        }
+    }, { passive: false });
+
+    // 3. ANIMATION HELPER
+    function animate(dir) {
+        document.body.style.transition = "transform 0.2s ease-out";
+        if (dir === 'next') {
+            document.body.style.transform = "translateX(-100vw)";
+            setTimeout(() => { if(window.PrintReader) window.PrintReader.postMessage('next_chapter'); }, 200);
         } else {
-            setTimeout(checkReady, 10);
-        }
-    }
-    checkReady();
-
-    function initializeReader() {
-        // --- VISIBLE DEBUGGER ---
-        const debug = document.createElement('div');
-        debug.style.cssText = "position:fixed; bottom:10px; left:10px; background:rgba(0,0,0,0.8); color:#00ff00; padding:8px; z-index:9999; font-size:14px; font-family:monospace; pointer-events:none; border-radius:4px;";
-        document.body.appendChild(debug);
-
-        function getScrollPos() {
-            return Math.ceil(document.body.scrollLeft);
-        }
-
-        function updateDebug() {
-            if (!document.body) return;
-            
-            const current = getScrollPos();
-            const totalWidth = document.body.scrollWidth;
-            const screenW = window.innerWidth;
-            const max = Math.round(totalWidth - screenW);
-            const pages = Math.round(totalWidth / screenW);
-            
-            // Logic Gates
-            const atStart = current <= 5;
-            const atEnd = current >= (max - 20);
-            
-            debug.innerText = `Pg:${pages} | Pos:${current}/${max} | End:${atEnd}`;
-        }
-
-        window.addEventListener('scroll', updateDebug, true);
-        document.body.addEventListener('scroll', updateDebug, true);
-        window.addEventListener('resize', updateDebug);
-        setTimeout(updateDebug, 500); 
-
-        // --- SWIPE LOGIC ---
-        let startX = 0;
-        let startScrollPos = 0;
-        let isAnimating = false;
-
-        document.addEventListener('touchstart', (e) => {
-            startX = e.changedTouches[0].screenX;
-            startScrollPos = getScrollPos();
-        }, { passive: true });
-
-        document.addEventListener('touchend', (e) => {
-            if (isAnimating) return;
-
-            const endX = e.changedTouches[0].screenX;
-            const diff = startX - endX;
-            
-            const maxScroll = Math.round(document.body.scrollWidth - window.innerWidth);
-            
-            // Logic Gates
-            const startedAtStart = startScrollPos <= 5;
-            const startedAtEnd = startScrollPos >= (maxScroll - 20);
-
-            // NEXT CHAPTER
-            if (diff > 50 && startedAtEnd) {
-                animateAndExit('next');
-            }
-            
-            // PREV CHAPTER
-            else if (diff < -50 && startedAtStart) {
-                animateAndExit('prev');
-            }
-        });
-
-        function animateAndExit(direction) {
-            isAnimating = true;
-            if (direction === 'next') {
-                document.body.style.transform = "translateX(-100vw)";
-                document.body.style.opacity = "0";
-                setTimeout(() => { if (window.PrintReader) window.PrintReader.postMessage('next_chapter'); }, 300);
-            } else {
-                document.body.style.transform = "translateX(100vw)";
-                document.body.style.opacity = "0";
-                setTimeout(() => { if (window.PrintReader) window.PrintReader.postMessage('prev_chapter'); }, 300);
-            }
+            document.body.style.transform = "translateX(100vw)";
+            setTimeout(() => { if(window.PrintReader) window.PrintReader.postMessage('prev_chapter'); }, 200);
         }
     }
 })();

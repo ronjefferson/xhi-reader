@@ -10,58 +10,48 @@ html {
 }
 
 body {
-    /* 1. THE "SAFE ZONE" CONTAINER */
-    /* We effectively shrink the page so text floats in the middle */
-    /* 100vh - 120px = 60px padding at Top and 60px at Bottom */
+    /* 1. LAYOUT CONTAINER */
+    /* Leaves 60px whitespace at top and bottom so text isn't cut off */
     height: calc(100vh - 120px) !important;
     width: 100vw !important;
     
-    /* Vertically Center the container */
-    margin-top: 60px;
-    margin-bottom: 60px;
-    margin-left: 0;
-    margin-right: 0;
-    
+    /* Center vertical */
+    margin: 60px 0; 
     padding: 0 !important;
     
-    /* 2. PACKED LAYOUT ENGINE */
+    /* 2. PACKED COLUMNS */
     column-width: 100vw;
     column-gap: 0;
-    
-    /* CRITICAL: "auto" fills top-to-bottom efficiently (Packed) */
-    column-fill: auto; 
+    column-fill: auto; /* Forces text to fill page 1 completely before page 2 */
     
     /* 3. SCROLLING */
     overflow-x: scroll !important;
-    overflow-y: hidden !important; /* Strict vertical lock */
+    overflow-y: hidden !important;
+    touch-action: pan-x;
     
     scroll-snap-type: x mandatory;
     overscroll-behavior: none;
-    touch-action: pan-x;
     
-    /* 4. TYPOGRAPHY */
     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
     font-size: 1.15em;
     line-height: 1.6;
     color: #1a1a1a;
     
-    /* 5. INTERACTIONS */
     -webkit-tap-highlight-color: transparent;
-    -webkit-user-select: text; /* Allow highlighting */
 }
 
 /* CONTENT ELEMENTS */
 p, h1, h2, h3, h4, h5, h6, li, div {
-    /* Standard spacing between paragraphs */
     margin-top: 0;
     margin-bottom: 1em;
-    
-    /* Side Padding only (Top/Bottom is handled by body height) */
     padding-left: 20px;
     padding-right: 20px;
     
-    /* PACKING RULES */
-    /* Allow paragraphs to break across columns so we don't have gaps */
+    /* 4. THE INTERACTION FIX */
+    /* Stops the browser from "focusing" text on tap (which causes the jump) */
+    /* But allows the swipe to pass through to the body */
+    pointer-events: none; 
+    
     orphans: 1; 
     widows: 1;
     
@@ -72,7 +62,6 @@ p, h1, h2, h3, h4, h5, h6, li, div {
 
 img {
     max-width: 100%; 
-    /* Ensure images fit inside our shrunken container */
     max-height: 100%; 
     display: block;
     margin: 10px auto;

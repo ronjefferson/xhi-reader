@@ -15,8 +15,11 @@ class _ReaderViewState extends State<ReaderView> {
   late ReaderViewModel _viewModel;
   WebViewController? _webViewController;
 
-  // UI State
-  bool _showControls = false; // Start hidden
+  // 1. THE CACHE
+  // We store the widget instance here so it never gets rebuilt.
+  WebViewWidget? _cachedWebView;
+
+  bool _showControls = false;
   bool _isBackwardNav = false;
 
   @override
@@ -43,15 +46,25 @@ class _ReaderViewState extends State<ReaderView> {
           );
         }
 
+        // 2. INITIALIZE ONCE
+        // We create the WebView only if it doesn't exist yet.
+        if (_cachedWebView == null) {
+          _initWebView();
+        }
+
         return Scaffold(
           resizeToAvoidBottomInset: false,
           backgroundColor: Colors.white,
+          // Static background for immersion
+          extendBodyBehindAppBar: true,
+
           body: Stack(
             children: [
-              // 1. THE WEBVIEW (Static Background)
-              Positioned.fill(child: _buildEpubWebView()),
+              // 3. USE CACHED INSTANCE
+              // Flutter sees this is the same instance and skips all work.
+              Positioned.fill(child: _cachedWebView!),
 
-              // 2. THE TOP BAR (Floating Overlay)
+              // 4. FLOATING CONTROLS
               AnimatedPositioned(
                 duration: const Duration(milliseconds: 200),
                 curve: Curves.easeInOut,
@@ -67,10 +80,29 @@ class _ReaderViewState extends State<ReaderView> {
     );
   }
 
-  Widget _buildFloatingAppBar() {
-    // We add padding for the status bar so the content doesn't overlap time/battery
-    final topPadding = MediaQuery.of(context).padding.top;
+  void _initWebView() {
+    String finalUrl = _viewModel.epubUrl ?? "about:blank";
 
+    // JS Logic for back navigation
+    if (_isBackwardNav) {
+      finalUrl += (finalUrl.contains('?') ? "&pos=end" : "?pos=end");
+    }
+
+    _webViewController = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(const Color(0xFFFFFFFF))
+      ..addJavaScriptChannel(
+        'PrintReader',
+        onMessageReceived: (message) => _handleJsMessage(message.message),
+      )
+      ..loadRequest(Uri.parse(finalUrl));
+
+    // Store it forever
+    _cachedWebView = WebViewWidget(controller: _webViewController!);
+  }
+
+  Widget _buildFloatingAppBar() {
+    final topPadding = MediaQuery.of(context).padding.top;
     return Container(
       height: kToolbarHeight + topPadding,
       padding: EdgeInsets.only(top: topPadding),
@@ -88,57 +120,14 @@ class _ReaderViewState extends State<ReaderView> {
       child: Row(
         children: [
           IconButton(
-            icon: const Icon(Icons.arrow_back, color: Colors.black87),
+            icon: const Icon(Icons.arrow_back),
             onPressed: () => Navigator.pop(context),
           ),
-          Expanded(
-            child: Text(
-              widget.book.title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Colors.black87,
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.list, color: Colors.black87),
-            onPressed: _showChapterList,
-          ),
+          Expanded(child: Text(widget.book.title, textAlign: TextAlign.center)),
+          IconButton(icon: const Icon(Icons.list), onPressed: _showChapterList),
         ],
       ),
     );
-  }
-
-  Widget _buildEpubWebView() {
-    String finalUrl = _viewModel.epubUrl ?? "about:blank";
-
-    // Add ?pos=end if going backwards
-    if (_isBackwardNav) {
-      if (finalUrl.contains('?')) {
-        finalUrl += "&pos=end";
-      } else {
-        finalUrl += "?pos=end";
-      }
-    }
-
-    if (_webViewController == null) {
-      _webViewController = WebViewController()
-        ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setBackgroundColor(const Color(0xFFFFFFFF))
-        ..addJavaScriptChannel(
-          'PrintReader',
-          onMessageReceived: (message) => _handleJsMessage(message.message),
-        )
-        ..loadRequest(Uri.parse(finalUrl));
-    } else {
-      _webViewController!.loadRequest(Uri.parse(finalUrl));
-    }
-
-    // No SafeArea here, let text flow full screen
-    return WebViewWidget(controller: _webViewController!);
   }
 
   void _handleJsMessage(String message) {
@@ -147,26 +136,23 @@ class _ReaderViewState extends State<ReaderView> {
     } else if (message == 'next_chapter') {
       if (_viewModel.hasNext) {
         _isBackwardNav = false;
+        // We must clear cache because we need a new URL for the new chapter
+        _cachedWebView = null;
         _viewModel.nextChapter();
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("End of book"),
-            duration: Duration(milliseconds: 500),
-          ),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text("End of book")));
       }
     } else if (message == 'prev_chapter') {
       if (_viewModel.hasPrevious) {
         _isBackwardNav = true;
+        _cachedWebView = null; // Clear cache for new chapter
         _viewModel.previousChapter();
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Start of book"),
-            duration: Duration(milliseconds: 500),
-          ),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text("Start of book")));
       }
     }
   }
@@ -183,25 +169,18 @@ class _ReaderViewState extends State<ReaderView> {
           children: [
             const Padding(
               padding: EdgeInsets.all(16.0),
-              child: Text(
-                "Chapters",
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
+              child: Text("Chapters"),
             ),
-            const Divider(height: 1),
             Expanded(
               child: ListView.builder(
                 itemCount: _viewModel.spine.length,
                 itemBuilder: (context, index) {
-                  final isSelected = index == _viewModel.currentChapterIndex;
                   return ListTile(
-                    leading: isSelected
-                        ? const Icon(Icons.play_arrow, color: Colors.blue)
-                        : const SizedBox(width: 24),
                     title: Text("Chapter ${index + 1}"),
                     onTap: () {
                       Navigator.pop(context);
                       _isBackwardNav = false;
+                      _cachedWebView = null; // Clear cache
                       _viewModel.jumpToChapter(index);
                     },
                   );

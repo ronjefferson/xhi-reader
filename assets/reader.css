@@ -1,74 +1,67 @@
+/* --- READER CSS --- */
 * { box-sizing: border-box; }
 
 html {
-    height: 100%;
-    width: 100%;
-    margin: 0;
-    padding: 0;
-    overflow: hidden; 
-    background-color: #FFFFFF;
+    height: 100vh !important;
+    width: 100vw !important;
+    
+    /* We handle scroll manually via JS Physics */
+    overflow-x: hidden !important; 
+    overflow-y: hidden !important;
+    
+    margin: 0 !important;
+    padding: 0 !important;
+    background-color: #ffffff !important;
+    
+    /* Disable native touch actions */
+    touch-action: none !important;
+    
+    -ms-overflow-style: none; 
+    scrollbar-width: none;
 }
 
 body {
-    /* 1. LAYOUT CONTAINER */
-    /* Leaves 60px whitespace at top and bottom so text isn't cut off */
-    height: calc(100vh - 120px) !important;
+    height: calc(100vh - 80px) !important;
     width: 100vw !important;
     
-    /* Center vertical */
-    margin: 60px 0; 
-    padding: 0 !important;
+    margin-top: 40px !important;
+    margin-bottom: 40px !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
     
-    /* 2. PACKED COLUMNS */
-    column-width: 100vw;
-    column-gap: 0;
-    column-fill: auto; /* Forces text to fill page 1 completely before page 2 */
+    /* REMOVE CONTAINER PADDING - We put it on text instead */
+    padding: 0 !important; 
+    border: none !important;
     
-    /* 3. SCROLLING */
-    overflow-x: scroll !important;
-    overflow-y: hidden !important;
-    touch-action: pan-x;
+    /* COLUMNS: Zero gap to make JS math perfect */
+    column-width: 100vw !important;
+    column-gap: 0px !important; 
+    column-fill: auto !important;
     
-    scroll-snap-type: x mandatory;
-    overscroll-behavior: none;
+    overflow: visible !important; 
     
-    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-    font-size: 1.15em;
-    line-height: 1.6;
-    color: #1a1a1a;
-    
-    -webkit-tap-highlight-color: transparent;
+    color: #000000 !important;
+    font-family: sans-serif !important;
+    font-size: 18px !important;
+    line-height: 1.6 !important;
+    text-align: justify;
 }
 
-/* CONTENT ELEMENTS */
-p, h1, h2, h3, h4, h5, h6, li, div {
-    margin-top: 0;
-    margin-bottom: 1em;
-    padding-left: 20px;
-    padding-right: 20px;
-    
-    /* 4. THE INTERACTION FIX */
-    /* Stops the browser from "focusing" text on tap (which causes the jump) */
-    /* But allows the swipe to pass through to the body */
-    pointer-events: none; 
-    
-    orphans: 1; 
-    widows: 1;
-    
-    scroll-snap-align: start;
-    scroll-snap-stop: always;
-    max-width: 100%;
+/* --- THE FIX: MARGINS ON CONTENT --- */
+/* Instead of column-gap, we put margins on the text itself. */
+/* This ensures Page 2, Page 3, etc. all have "Padding" from the edge. */
+p, h1, h2, h3, h4, h5, h6, li, blockquote, dd, dt {
+    margin-left: 20px !important;
+    margin-right: 20px !important;
 }
 
-img {
-    max-width: 100%; 
-    max-height: 100%; 
-    display: block;
-    margin: 10px auto;
-    object-fit: contain;
-    
-    scroll-snap-align: start;
-    scroll-snap-stop: always;
+img, svg, image {
+    /* Images fit within the screen width minus margins */
+    max-width: calc(100vw - 40px) !important;
+    max-height: 100% !important;
+    object-fit: contain !important;
+    display: block !important;
+    margin: 0 auto !important;
 }
 
-::-webkit-scrollbar { display: none; width: 0; }
+::-webkit-scrollbar { display: none; }

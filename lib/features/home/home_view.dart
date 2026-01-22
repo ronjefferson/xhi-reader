@@ -26,7 +26,6 @@ class _HomeViewState extends State<HomeView> {
   Future<void> _loadBooks({bool force = false}) async {
     setState(() => isLoading = true);
 
-    // Auto-detects books from Downloads folder
     final loadedBooks = await LibraryService().scanForEpubs(
       forceRefresh: force,
     );
@@ -48,14 +47,12 @@ class _HomeViewState extends State<HomeView> {
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         actions: [
-          // REFRESH BUTTON: Triggers the auto-detection scan again
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () => _loadBooks(force: true),
           ),
         ],
       ),
-      // --- SIDEBAR (DRAWER) ---
       drawer: Drawer(
         child: ListView(
           padding: EdgeInsets.zero,
@@ -79,24 +76,22 @@ class _HomeViewState extends State<HomeView> {
                 ],
               ),
             ),
-            // 1. Profile Placeholder
             ListTile(
               leading: const Icon(Icons.person_outline),
               title: const Text("Profile"),
               onTap: () {
-                Navigator.pop(context); // Close drawer
+                Navigator.pop(context);
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text("Profile is coming soon!")),
                 );
               },
             ),
             const Divider(),
-            // 2. Settings
             ListTile(
               leading: const Icon(Icons.settings_outlined),
               title: const Text("Settings"),
               onTap: () {
-                Navigator.pop(context); // Close drawer
+                Navigator.pop(context);
                 Navigator.push(
                   context,
                   MaterialPageRoute(builder: (context) => const SettingsView()),
@@ -135,13 +130,22 @@ class _HomeViewState extends State<HomeView> {
               itemBuilder: (context, index) {
                 final book = books[index];
                 return GestureDetector(
-                  onTap: () {
-                    Navigator.push(
+                  onTap: () async {
+                    // 1. UPDATE TIMESTAMP
+                    await LibraryService().updateLastRead(book.id);
+
+                    if (!context.mounted) return;
+
+                    // 2. OPEN READER
+                    await Navigator.push(
                       context,
                       MaterialPageRoute(
                         builder: (context) => ReaderView(book: book),
                       ),
                     );
+
+                    // 3. REFRESH ON RETURN (to apply new sort order)
+                    _loadBooks(force: false);
                   },
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,

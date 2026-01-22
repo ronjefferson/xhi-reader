@@ -8,19 +8,23 @@ import '../../core/services/epub_service.dart';
 class ReaderViewModel extends ChangeNotifier {
   final BookModel book;
 
+  // Connection & State
   String? epubUrl;
   bool isReady = false;
   String? errorMessage;
 
+  // Navigation
   List<String> spine = [];
   List<String> chapterTitles = [];
   int currentChapterIndex = 0;
 
+  // Pagination Logic
   List<int> _chapterPageCounts = [];
   List<int> _cumulativePageCounts = [];
   int _totalBookPages = 1;
   double _currentChapterProgress = 0.0;
 
+  // Slider Jump Request
   double? requestScrollToProgress;
 
   ReaderViewModel({required this.book});
@@ -40,14 +44,15 @@ class ReaderViewModel extends ChangeNotifier {
         appDocPath,
       );
 
+      // Calculate Pages AND Extract Titles
       await _calculateADEPageCounts(book.id, appDocPath);
 
       if (spine.isNotEmpty) {
-        // Add cache busting here
-        final String v = DateTime.now().millisecondsSinceEpoch.toString();
-        spine = spine.map((url) => "$url?v=$v").toList();
+        currentChapterIndex = 0;
 
-        epubUrl = spine[0];
+        // Use helper to set initial URL with correct flags
+        _updateUrl(spine[0]);
+
         isReady = true;
         notifyListeners();
       } else {
@@ -62,12 +67,30 @@ class ReaderViewModel extends ChangeNotifier {
     }
   }
 
-  // --- NAVIGATION FIXES ---
+  // --- HELPER: Update URL with Boundary Flags ---
+  void _updateUrl(String baseUrl, {bool posEnd = false}) {
+    final String v = DateTime.now().millisecondsSinceEpoch.toString();
+
+    // Check Boundaries
+    bool isFirst = currentChapterIndex == 0;
+    bool isLast = currentChapterIndex == spine.length - 1;
+
+    String finalUrl = "$baseUrl?v=$v";
+    if (posEnd) finalUrl += "&pos=end";
+
+    // Pass flags to JS so it can block invalid swipes
+    if (isFirst) finalUrl += "&isFirst=true";
+    if (isLast) finalUrl += "&isLast=true";
+
+    epubUrl = finalUrl;
+  }
+
+  // --- NAVIGATION LOGIC ---
 
   void nextChapter() {
     if (hasNext) {
       currentChapterIndex++;
-      epubUrl = spine[currentChapterIndex]; // Normal load (starts at top)
+      _updateUrl(spine[currentChapterIndex]);
       requestScrollToProgress = 0.0;
       notifyListeners();
     }
@@ -76,44 +99,70 @@ class ReaderViewModel extends ChangeNotifier {
   void previousChapter() {
     if (hasPrevious) {
       currentChapterIndex--;
-      String baseUrl = spine[currentChapterIndex];
-      // FIX: Correctly append &pos=end (spine urls already have ?v=...)
-      epubUrl = "$baseUrl&pos=end";
+      _updateUrl(spine[currentChapterIndex], posEnd: true);
       requestScrollToProgress = 1.0;
       notifyListeners();
     }
   }
 
-  // ... (Keep existing _calculateADEPageCounts, getCurrentGlobalPage, etc.) ...
-  // Copy-paste the exact same methods from the previous working step for:
-  // _calculateADEPageCounts, _stripHtml, getCurrentGlobalPage, jumpToGlobalPage, getPreviewLocation
+  void jumpToChapter(int index) {
+    if (index >= 0 && index < spine.length) {
+      currentChapterIndex = index;
+      _updateUrl(spine[index]);
+      requestScrollToProgress = 0.0;
+      notifyListeners();
+    }
+  }
 
-  // Re-pasting them here for completeness:
+  void jumpToGlobalPage(int globalPage) {
+    globalPage = globalPage.clamp(1, _totalBookPages);
+    for (int i = 0; i < _cumulativePageCounts.length; i++) {
+      int start = _cumulativePageCounts[i];
+      int count = _chapterPageCounts[i];
+
+      if (globalPage <= start + count) {
+        int localPage = globalPage - start;
+        double percent = (localPage - 1) / (count > 1 ? count - 1 : 1);
+
+        requestScrollToProgress = percent.clamp(0.0, 1.0);
+
+        if (currentChapterIndex != i) {
+          currentChapterIndex = i;
+          _updateUrl(spine[i]);
+        } else {
+          notifyListeners(); // Just update progress if same chapter
+        }
+        return;
+      }
+    }
+  }
+
+  // ... (Standard Helpers below) ...
+
   Future<void> _calculateADEPageCounts(String bookId, String appDocPath) async {
     _chapterPageCounts.clear();
     _cumulativePageCounts.clear();
     chapterTitles.clear();
     int runningTotal = 0;
     int index = 0;
+
     for (String url in spine) {
       _cumulativePageCounts.add(runningTotal);
-      // Remove query params for file lookup
       Uri uri = Uri.parse(url);
       String localPath = "$appDocPath${uri.path}";
       int pages = await EpubService().countPagesForChapter(localPath);
 
-      // Title Extraction
       String title = "Chapter ${index + 1}";
       File file = File(localPath);
       if (await file.exists()) {
         try {
-          String c = await file.readAsString();
+          String content = await file.readAsString();
           RegExp h1 = RegExp(
             r'<h1[^>]*>(.*?)</h1>',
             caseSensitive: false,
             dotAll: true,
           );
-          var m = h1.firstMatch(c);
+          var m = h1.firstMatch(content);
           if (m != null) title = _stripHtml(m.group(1)!);
         } catch (e) {}
       }
@@ -140,52 +189,25 @@ class ReaderViewModel extends ChangeNotifier {
     return start + pagesIn + 1;
   }
 
-  void jumpToGlobalPage(int globalPage) {
-    globalPage = globalPage.clamp(1, _totalBookPages);
-    for (int i = 0; i < _cumulativePageCounts.length; i++) {
-      if (globalPage <= _cumulativePageCounts[i] + _chapterPageCounts[i]) {
-        int local = globalPage - _cumulativePageCounts[i];
-        double p =
-            (local - 1) /
-            (_chapterPageCounts[i] > 1 ? _chapterPageCounts[i] - 1 : 1);
-        requestScrollToProgress = p.clamp(0.0, 1.0);
-        if (currentChapterIndex != i) {
-          currentChapterIndex = i;
-          epubUrl = spine[i];
-        }
-        notifyListeners();
-        return;
-      }
-    }
-  }
-
   Map<String, dynamic> getPreviewLocation(int globalPage) {
     globalPage = globalPage.clamp(1, _totalBookPages);
     for (int i = 0; i < _cumulativePageCounts.length; i++) {
-      if (globalPage <= _cumulativePageCounts[i] + _chapterPageCounts[i]) {
-        int local = globalPage - _cumulativePageCounts[i];
-        double p =
-            (local - 1) /
-            (_chapterPageCounts[i] > 1 ? _chapterPageCounts[i] - 1 : 1);
-        return {'chapterIndex': i, 'percent': p.clamp(0.0, 1.0)};
+      int start = _cumulativePageCounts[i];
+      int count = _chapterPageCounts[i];
+      if (globalPage <= start + count) {
+        int localPage = globalPage - start;
+        double percent = (localPage - 1) / (count > 1 ? count - 1 : 1);
+        return {'chapterIndex': i, 'percent': percent.clamp(0.0, 1.0)};
       }
     }
     return {'chapterIndex': 0, 'percent': 0.0};
   }
 
-  void updateScrollProgress(double p) {
-    _currentChapterProgress = p;
+  void updateScrollProgress(double progress) {
+    _currentChapterProgress = progress;
     notifyListeners();
   }
 
   bool get hasNext => currentChapterIndex < spine.length - 1;
   bool get hasPrevious => currentChapterIndex > 0;
-  void jumpToChapter(int i) {
-    if (i >= 0 && i < spine.length) {
-      currentChapterIndex = i;
-      epubUrl = spine[i];
-      requestScrollToProgress = 0.0;
-      notifyListeners();
-    }
-  }
 }

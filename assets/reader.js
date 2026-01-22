@@ -1,134 +1,187 @@
 (function() {
     // --- UTILS ---
-    function getScrollX() { return window.pageXOffset || document.documentElement.scrollLeft || document.body.scrollLeft || 0; }
-    function getScrollWidth() { return document.documentElement.scrollWidth || document.body.scrollWidth || 0; }
-    function getViewportWidth() { return window.innerWidth || document.documentElement.clientWidth || document.body.clientWidth || 0; }
+    // We track scroll manually via Transform
+    let globalScrollX = 0; 
+
+    function getScrollWidth() { 
+        return document.body.scrollWidth || document.documentElement.scrollWidth; 
+    }
+    
+    function getViewportWidth() { return window.innerWidth; }
+    
     function post(msg) { if (window.PrintReader) window.PrintReader.postMessage(msg); }
 
-    // --- 1. INITIALIZATION ---
+    // --- 1. CORE MOVEMENT ---
+    function setScroll(x) {
+        globalScrollX = x;
+        document.body.style.transform = `translate3d(${-x}px, 0, 0)`;
+    }
+
+    // --- 2. INITIALIZATION ---
+    let isFirstChapter = false;
+    let isLastChapter = false;
+
     function checkInitialPosition() {
         const urlParams = new URLSearchParams(window.location.search);
+        
+        // READ FLAGS FROM FLUTTER
+        isFirstChapter = urlParams.get('isFirst') === 'true';
+        isLastChapter = urlParams.get('isLast') === 'true';
+
         if (urlParams.get('pos') === 'end') {
-            const w = getScrollWidth();
-            window.scrollTo(w, 0); 
+            const w = getScrollWidth() - getViewportWidth();
+            setScroll(w);
         } else {
-            window.scrollTo(0, 0); 
+            setScroll(0);
         }
         setTimeout(() => { post('ready'); reportProgress(); }, 150);
     }
-    if (document.body) checkInitialPosition();
     window.onload = checkInitialPosition;
 
-    // --- 2. REPORT PROGRESS ---
+    // --- 3. REPORT PROGRESS ---
     function reportProgress() {
         const w = getViewportWidth();
         if (w <= 0) return;
         const total = getScrollWidth() - w;
         if (total <= 0) { post('progress:0.0'); return; }
-        const p = getScrollX() / total;
+        const p = globalScrollX / total;
         post(`progress:${Math.max(0, Math.min(1, p)).toFixed(4)}`);
     }
     window.addEventListener('resize', reportProgress);
 
-    // --- 3. SLIDER JUMP ---
+    // --- 4. SLIDER JUMP ---
     window.scrollToPercent = function(percent) {
         const total = getScrollWidth() - getViewportWidth();
         if (total <= 0) return;
-        window.scrollTo({ left: total * percent, behavior: 'auto' });
+        setScroll(total * percent);
         reportProgress();
     };
 
-    // --- 4. PHYSICS ENGINE (1:1 Finger Tracking) ---
+    // --- 5. PHYSICS ENGINE ---
     let startX = 0;
     let startScroll = 0;
     let isDragging = false;
     let startTime = 0;
     let animationFrameId;
 
-    // A. TOUCH START
     window.addEventListener('touchstart', (e) => {
-        cancelAnimationFrame(animationFrameId); // Stop any active snap
+        cancelAnimationFrame(animationFrameId);
         startX = e.touches[0].clientX;
-        startScroll = getScrollX();
+        startScroll = globalScrollX;
         startTime = new Date().getTime();
         isDragging = true;
     }, { passive: false });
 
-    // B. TOUCH MOVE (Sticky Scroll)
     window.addEventListener('touchmove', (e) => {
         if (!isDragging) return;
-        if (e.cancelable) e.preventDefault(); // Stop native scroll momentum
+        if (e.cancelable) e.preventDefault(); 
         
         const currentX = e.touches[0].clientX;
-        const diff = startX - currentX;
-        
-        // Move page exactly with finger
-        window.scrollTo(startScroll + diff, 0);
-        
+        const delta = startX - currentX; // +ve = Moving Right (Next)
+        const intended = startScroll + delta;
+        const width = getViewportWidth();
+        const maxScroll = getScrollWidth() - width;
+
+        // --- BLOCKING LOGIC ---
+
+        // A. PULLING PREVIOUS (Moving Left into Void)
+        if (intended < 0) {
+            // STOP! If this is the first chapter, do not allow pull
+            if (isFirstChapter) { 
+                setScroll(0); 
+                return; 
+            }
+            setScroll(intended); 
+        } 
+        // B. PULLING NEXT (Moving Right into Void)
+        else if (intended > maxScroll) {
+            // STOP! If this is the last chapter, do not allow pull
+            if (isLastChapter) { 
+                setScroll(maxScroll); 
+                return; 
+            }
+            setScroll(intended);
+        } 
+        // C. NORMAL SCROLL
+        else {
+            setScroll(intended); 
+        }
     }, { passive: false });
 
-    // C. TOUCH END (Snap)
     window.addEventListener('touchend', (e) => {
         if (!isDragging) return;
         isDragging = false;
 
-        const endX = e.changedTouches[0].clientX;
-        const diff = startX - endX;
         const time = new Date().getTime() - startTime;
         const width = getViewportWidth();
         
-        // 1. TAP DETECTION
-        if (time < 300 && Math.abs(diff) < 10) {
-            post('toggle_controls');
+        // TAP
+        if (time < 300 && Math.abs(startX - e.changedTouches[0].clientX) < 10) {
+            if (globalScrollX >= 0 && globalScrollX <= (getScrollWidth() - width)) {
+                post('toggle_controls');
+                return;
+            }
+        }
+
+        // EDGE PULL SNAP
+        const maxScroll = getScrollWidth() - width;
+        const threshold = 60;
+
+        // Pulling Previous
+        if (globalScrollX < 0) {
+            if (globalScrollX < -threshold && !isFirstChapter) {
+                 smoothScrollTo(-width, () => post('prev_chapter'));
+            } else {
+                 smoothScrollTo(0);
+            }
             return;
         }
 
-        // 2. CALCULATE TARGET PAGE
-        // We use the START position as the anchor
+        // Pulling Next
+        if (globalScrollX > maxScroll) {
+            const overflow = globalScrollX - maxScroll;
+            if (overflow > threshold && !isLastChapter) {
+                smoothScrollTo(maxScroll + width, () => post('next_chapter'));
+            } else {
+                smoothScrollTo(maxScroll);
+            }
+            return;
+        }
+
+        // NORMAL PAGE SNAP
+        const endX = e.changedTouches[0].clientX;
+        const diff = startX - endX;
         let startPage = Math.round(startScroll / width);
         let targetPage = startPage;
-        
-        const currentScroll = getScrollX();
-        const maxScroll = getScrollWidth() - width;
-        const threshold = 50; // Drag 50px to commit turn
+        const snapThreshold = 50;
 
-        // NEXT PAGE
-        if (diff > threshold) {
-            if (startScroll >= maxScroll - 10) { post('next_chapter'); return; }
-            targetPage = startPage + 1;
-        } 
-        // PREV PAGE
-        else if (diff < -threshold) {
-            if (startScroll <= 10) { post('prev_chapter'); return; }
-            targetPage = startPage - 1;
-        }
-        
-        // 3. EXECUTE SNAP
+        if (diff > snapThreshold) targetPage = startPage + 1;
+        else if (diff < -snapThreshold) targetPage = startPage - 1;
+
         smoothScrollTo(targetPage * width);
         
     }, { passive: false });
 
-    // Custom Animation for "Tight" Snap Feel
-    function smoothScrollTo(targetX) {
-        const startX = getScrollX();
+    // --- ANIMATOR ---
+    function smoothScrollTo(targetX, onFinish) {
+        const startX = globalScrollX;
         const distance = targetX - startX;
-        const duration = 250; // Fast snap (250ms)
+        const duration = 250;
         let start = null;
 
         function step(timestamp) {
             if (!start) start = timestamp;
             const progress = timestamp - start;
             const percent = Math.min(progress / duration, 1);
-            
-            // Ease Out Cubic (Starts fast, slows down gently)
             const ease = 1 - Math.pow(1 - percent, 3);
             
-            window.scrollTo(startX + (distance * ease), 0);
+            setScroll(startX + (distance * ease));
 
             if (progress < duration) {
                 animationFrameId = requestAnimationFrame(step);
             } else {
                 reportProgress();
+                if (onFinish) onFinish();
             }
         }
         animationFrameId = requestAnimationFrame(step);

@@ -5,63 +5,56 @@ html {
     height: 100vh !important;
     width: 100vw !important;
     
-    /* We handle scroll manually via JS Physics */
-    overflow-x: hidden !important; 
-    overflow-y: hidden !important;
+    /* 1. KILL SCROLLBARS PERMANENTLY */
+    overflow: hidden !important; 
     
     margin: 0 !important;
     padding: 0 !important;
     background-color: #ffffff !important;
-    
-    /* Disable native touch actions */
     touch-action: none !important;
-    
-    -ms-overflow-style: none; 
-    scrollbar-width: none;
 }
 
 body {
     height: calc(100vh - 80px) !important;
-    width: 100vw !important;
+    /* Body width must match viewport, content spills out to the right */
+    width: 100vw !important; 
     
     margin-top: 40px !important;
     margin-bottom: 40px !important;
     margin-left: 0 !important;
     margin-right: 0 !important;
     
-    /* REMOVE CONTAINER PADDING - We put it on text instead */
+    /* 2. ALLOW JS TO MEASURE WIDTH */
+    overflow: visible !important; 
+    
     padding: 0 !important; 
     border: none !important;
     
-    /* COLUMNS: Zero gap to make JS math perfect */
+    /* COLUMNS */
     column-width: 100vw !important;
     column-gap: 0px !important; 
     column-fill: auto !important;
-    
-    overflow: visible !important; 
     
     color: #000000 !important;
     font-family: sans-serif !important;
     font-size: 18px !important;
     line-height: 1.6 !important;
     text-align: justify;
+    
+    /* Hardware Acceleration for Smooth Transforms */
+    will-change: transform;
 }
 
-/* --- THE FIX: MARGINS ON CONTENT --- */
-/* Instead of column-gap, we put margins on the text itself. */
-/* This ensures Page 2, Page 3, etc. all have "Padding" from the edge. */
+/* MARGINS ON CONTENT */
 p, h1, h2, h3, h4, h5, h6, li, blockquote, dd, dt {
     margin-left: 20px !important;
     margin-right: 20px !important;
 }
 
 img, svg, image {
-    /* Images fit within the screen width minus margins */
     max-width: calc(100vw - 40px) !important;
     max-height: 100% !important;
     object-fit: contain !important;
     display: block !important;
     margin: 0 auto !important;
 }
-
-::-webkit-scrollbar { display: none; }

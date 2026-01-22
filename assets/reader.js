@@ -15,9 +15,12 @@
     function post(msg) { if (window.PrintReader) window.PrintReader.postMessage(msg); }
 
     let globalScrollX = 0;
+    // New flag to track if we are at the very start of the book
+    let isFirstChapter = false; 
     
     function setScroll(x) {
         globalScrollX = x;
+        // Use transform for smooth movement (Checkpoint 5 Architecture)
         document.body.style.transform = `translate3d(${-x}px, 0, 0)`;
     }
 
@@ -27,6 +30,10 @@
         post(`page_count:${pages}`);
 
         const urlParams = new URLSearchParams(window.location.search);
+        
+        // 1. Check if this is the first chapter (Passed from Flutter)
+        isFirstChapter = urlParams.get('isFirst') === 'true';
+
         if (urlParams.get('pos') === 'end') {
             setScroll(getScrollWidth() - getWidth());
         } else {
@@ -49,11 +56,11 @@
 
             setScroll(targetX);
 
-            // Force Repaint
+            // Force Repaint (Digital Nudge)
             const forceReflow = document.body.offsetHeight; 
 
-            // Update Flutter (Safe Calculation)
-            const newPercent = total > 0 ? targetX / total : 0;
+            // Update Flutter
+            const newPercent = targetX / total;
             post(`progress:${newPercent}`);
         });
     };
@@ -84,19 +91,39 @@
         const maxScroll = getScrollWidth() - width;
         const diff = startX - e.changedTouches[0].clientX;
 
+        // Tap
         if (Math.abs(diff) < 10) {
             post('toggle_controls');
             return;
         }
 
+        // Snap Logic
         let targetPage = Math.round(globalScrollX / width);
         
-        if (diff > 50) { 
-            if (globalScrollX < maxScroll - 10) targetPage = Math.ceil(startScroll / width) + 1;
-            else { post('next_chapter'); return; }
-        } else if (diff < -50) { 
-            if (globalScrollX > 10) targetPage = Math.floor(startScroll / width) - 1;
-            else { post('prev_chapter'); return; }
+        if (diff > 50) { // NEXT (Swipe Left)
+            if (globalScrollX < maxScroll - 10) {
+                targetPage = Math.ceil(startScroll / width) + 1;
+            } else { 
+                post('next_chapter'); 
+                return; 
+            }
+        } 
+        else if (diff < -50) { // PREV (Swipe Right)
+            if (globalScrollX > 10) {
+                // Normal internal page turn
+                targetPage = Math.floor(startScroll / width) - 1;
+            } else { 
+                // We are at the start of the chapter
+                
+                // CRITICAL FIX: If first chapter, don't allow prev_chapter
+                if (isFirstChapter) {
+                    // Snap back to 0 (Rubber band effect)
+                    targetPage = 0;
+                } else {
+                    post('prev_chapter'); 
+                    return; 
+                }
+            }
         }
 
         const targetX = targetPage * width;
@@ -122,8 +149,8 @@
             } else {
                 setScroll(targetX);
                 
-                // CRASH FIX: Check for 0 width to avoid Infinity
                 const total = getScrollWidth() - getWidth();
+                // Avoid divide by zero
                 const p = total > 0 ? targetX / total : 0;
                 post(`progress:${p}`);
             }

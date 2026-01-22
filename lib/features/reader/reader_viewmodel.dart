@@ -44,7 +44,7 @@ class ReaderViewModel extends ChangeNotifier {
         appDocPath,
       );
 
-      // Calculate Pages AND Extract Titles (ADE Logic)
+      // Calculate Pages AND Extract Smart Titles
       await _calculateADEPageCounts(book.id, appDocPath);
 
       if (spine.isNotEmpty) {
@@ -66,7 +66,6 @@ class ReaderViewModel extends ChangeNotifier {
 
   // --- HELPER: Update URL with Boundary Flags ---
   void _updateUrl(String baseUrl, {bool posEnd = false}) {
-    // We add a timestamp to ensure caching doesn't block chapter loading
     final String v = DateTime.now().millisecondsSinceEpoch.toString();
 
     bool isFirst = currentChapterIndex == 0;
@@ -140,7 +139,7 @@ class ReaderViewModel extends ChangeNotifier {
     }
   }
 
-  // --- PAGINATION HELPERS ---
+  // --- PAGINATION & TITLES ---
 
   Future<void> _calculateADEPageCounts(String bookId, String appDocPath) async {
     _chapterPageCounts.clear();
@@ -155,21 +154,58 @@ class ReaderViewModel extends ChangeNotifier {
       String localPath = "$appDocPath${uri.path}";
       int pages = await EpubService().countPagesForChapter(localPath);
 
-      // Extract Title from H1
-      String title = "Chapter ${index + 1}";
+      // --- SMART TITLE LOGIC ---
+      // 1. Start with "Section X"
+      String title = "Section ${index + 1}";
+
       File file = File(localPath);
       if (await file.exists()) {
         try {
           String content = await file.readAsString();
-          RegExp h1 = RegExp(
+
+          String? extracted;
+
+          // 2. Look for H1 (Most reliable)
+          var h1 = RegExp(
             r'<h1[^>]*>(.*?)</h1>',
             caseSensitive: false,
             dotAll: true,
-          );
-          var m = h1.firstMatch(content);
-          if (m != null) title = _stripHtml(m.group(1)!);
-        } catch (e) {}
+          ).firstMatch(content);
+          if (h1 != null) {
+            extracted = h1.group(1);
+          } else {
+            // 3. Fallback to H2 if no H1
+            var h2 = RegExp(
+              r'<h2[^>]*>(.*?)</h2>',
+              caseSensitive: false,
+              dotAll: true,
+            ).firstMatch(content);
+            if (h2 != null) extracted = h2.group(1);
+          }
+
+          // Apply extracted title if valid
+          if (extracted != null) {
+            String clean = _stripHtml(extracted);
+            if (clean.trim().isNotEmpty && clean.length < 100) {
+              title = clean;
+            }
+          }
+
+          // 4. Illustration Detection (Only if still default "Section X")
+          if (title.startsWith("Section")) {
+            bool hasImage =
+                content.contains('<img') ||
+                content.contains('<svg') ||
+                content.contains('<image');
+            if (content.length < 1500 && hasImage) {
+              title = "Illustration";
+            }
+          }
+        } catch (e) {
+          // Keep default if file read fails
+        }
       }
+
       chapterTitles.add(title);
       _chapterPageCounts.add(pages);
       runningTotal += pages;
@@ -196,7 +232,7 @@ class ReaderViewModel extends ChangeNotifier {
     int start = _cumulativePageCounts[currentChapterIndex];
     int count = _chapterPageCounts[currentChapterIndex];
 
-    // CRASH FIX: Sanitize potential NaN/Infinity from JS
+    // Sanitize potential NaN/Infinity from JS
     double safeProgress = _currentChapterProgress;
     if (safeProgress.isNaN || safeProgress.isInfinite) {
       safeProgress = 0.0;
@@ -228,9 +264,7 @@ class ReaderViewModel extends ChangeNotifier {
   }
 
   void updateScrollProgress(double progress) {
-    // Sanitize
     if (progress.isNaN || progress.isInfinite) progress = 0.0;
-
     _currentChapterProgress = progress;
     notifyListeners();
   }

@@ -1,36 +1,33 @@
-/* --- READER CSS --- */
+/* --- READER CSS (Transform Architecture) --- */
 * { box-sizing: border-box; }
 
 html {
     height: 100vh !important;
     width: 100vw !important;
-    
-    /* 1. KILL SCROLLBARS PERMANENTLY */
     overflow: hidden !important; 
-    
     margin: 0 !important;
     padding: 0 !important;
     background-color: #ffffff !important;
-    touch-action: none !important;
+    
+    /* CRITICAL FIX: Disables native browser gestures so our JS Physics engine works */
+    touch-action: none !important; 
 }
 
 body {
-    height: calc(100vh - 80px) !important;
-    /* Body width must match viewport, content spills out to the right */
+    height: calc(100vh - 80px) !important; /* Safe area for text */
     width: 100vw !important; 
-    
     margin-top: 40px !important;
     margin-bottom: 40px !important;
     margin-left: 0 !important;
     margin-right: 0 !important;
     
-    /* 2. ALLOW JS TO MEASURE WIDTH */
+    /* Allow JS to calculate total width */
     overflow: visible !important; 
     
     padding: 0 !important; 
     border: none !important;
     
-    /* COLUMNS */
+    /* Columns */
     column-width: 100vw !important;
     column-gap: 0px !important; 
     column-fill: auto !important;
@@ -41,11 +38,11 @@ body {
     line-height: 1.6 !important;
     text-align: justify;
     
-    /* Hardware Acceleration for Smooth Transforms */
+    /* Optimization for Transforms */
     will-change: transform;
+    backface-visibility: hidden;
 }
 
-/* MARGINS ON CONTENT */
 p, h1, h2, h3, h4, h5, h6, li, blockquote, dd, dt {
     margin-left: 20px !important;
     margin-right: 20px !important;
@@ -59,18 +56,9 @@ img, svg, image {
     margin: 0 auto !important;
 }
 
-html.dark-mode {
-    background-color: #121212 !important;
-}
-
+html.dark-mode { background-color: #121212 !important; }
 body.dark-mode {
-    color: #e0e0e0 !important; /* Soft white text */
+    color: #e0e0e0 !important; 
     background-color: #121212 !important;
 }
-
-/* Optional: Slightly dim images in dark mode to reduce glare */
-html.dark-mode img, 
-html.dark-mode svg, 
-html.dark-mode image {
-    opacity: 0.85 !important;
-}
+html.dark-mode img { opacity: 0.85 !important; }

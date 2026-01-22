@@ -44,15 +44,12 @@ class ReaderViewModel extends ChangeNotifier {
         appDocPath,
       );
 
-      // Calculate Pages AND Extract Titles
+      // Calculate Pages AND Extract Titles (ADE Logic)
       await _calculateADEPageCounts(book.id, appDocPath);
 
       if (spine.isNotEmpty) {
         currentChapterIndex = 0;
-
-        // Use helper to set initial URL with correct flags
         _updateUrl(spine[0]);
-
         isReady = true;
         notifyListeners();
       } else {
@@ -69,16 +66,15 @@ class ReaderViewModel extends ChangeNotifier {
 
   // --- HELPER: Update URL with Boundary Flags ---
   void _updateUrl(String baseUrl, {bool posEnd = false}) {
+    // We add a timestamp to ensure caching doesn't block chapter loading
     final String v = DateTime.now().millisecondsSinceEpoch.toString();
 
-    // Check Boundaries
     bool isFirst = currentChapterIndex == 0;
     bool isLast = currentChapterIndex == spine.length - 1;
 
     String finalUrl = "$baseUrl?v=$v";
     if (posEnd) finalUrl += "&pos=end";
 
-    // Pass flags to JS so it can block invalid swipes
     if (isFirst) finalUrl += "&isFirst=true";
     if (isLast) finalUrl += "&isLast=true";
 
@@ -124,20 +120,27 @@ class ReaderViewModel extends ChangeNotifier {
         int localPage = globalPage - start;
         double percent = (localPage - 1) / (count > 1 ? count - 1 : 1);
 
-        requestScrollToProgress = percent.clamp(0.0, 1.0);
+        // Sanitize percent
+        percent = percent.clamp(0.0, 1.0);
+        if (percent.isNaN || percent.isInfinite) percent = 0.0;
 
-        if (currentChapterIndex != i) {
+        if (currentChapterIndex == i) {
+          // Same Chapter: Just Scroll
+          requestScrollToProgress = percent;
+          notifyListeners();
+        } else {
+          // New Chapter: Load it
           currentChapterIndex = i;
           _updateUrl(spine[i]);
-        } else {
-          notifyListeners(); // Just update progress if same chapter
+          requestScrollToProgress = percent;
+          notifyListeners();
         }
         return;
       }
     }
   }
 
-  // ... (Standard Helpers below) ...
+  // --- PAGINATION HELPERS ---
 
   Future<void> _calculateADEPageCounts(String bookId, String appDocPath) async {
     _chapterPageCounts.clear();
@@ -152,6 +155,7 @@ class ReaderViewModel extends ChangeNotifier {
       String localPath = "$appDocPath${uri.path}";
       int pages = await EpubService().countPagesForChapter(localPath);
 
+      // Extract Title from H1
       String title = "Chapter ${index + 1}";
       File file = File(localPath);
       if (await file.exists()) {
@@ -182,10 +186,25 @@ class ReaderViewModel extends ChangeNotifier {
 
   int getCurrentGlobalPage() {
     if (_chapterPageCounts.isEmpty) return 1;
+
+    // Safety Check: Index out of bounds
+    if (currentChapterIndex < 0 ||
+        currentChapterIndex >= _cumulativePageCounts.length) {
+      return 1;
+    }
+
     int start = _cumulativePageCounts[currentChapterIndex];
     int count = _chapterPageCounts[currentChapterIndex];
-    int pagesIn = (_currentChapterProgress * count).round();
+
+    // CRASH FIX: Sanitize potential NaN/Infinity from JS
+    double safeProgress = _currentChapterProgress;
+    if (safeProgress.isNaN || safeProgress.isInfinite) {
+      safeProgress = 0.0;
+    }
+
+    int pagesIn = (safeProgress * count).round();
     if (pagesIn >= count) pagesIn = count - 1;
+
     return start + pagesIn + 1;
   }
 
@@ -197,13 +216,21 @@ class ReaderViewModel extends ChangeNotifier {
       if (globalPage <= start + count) {
         int localPage = globalPage - start;
         double percent = (localPage - 1) / (count > 1 ? count - 1 : 1);
-        return {'chapterIndex': i, 'percent': percent.clamp(0.0, 1.0)};
+
+        // Sanitize
+        percent = percent.clamp(0.0, 1.0);
+        if (percent.isNaN || percent.isInfinite) percent = 0.0;
+
+        return {'chapterIndex': i, 'percent': percent};
       }
     }
     return {'chapterIndex': 0, 'percent': 0.0};
   }
 
   void updateScrollProgress(double progress) {
+    // Sanitize
+    if (progress.isNaN || progress.isInfinite) progress = 0.0;
+
     _currentChapterProgress = progress;
     notifyListeners();
   }

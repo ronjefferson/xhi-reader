@@ -36,7 +36,7 @@ class EpubService {
             final response = await innerHandler(request);
             final path = request.url.path.toLowerCase();
 
-            // 2. INJECT ASSETS INLINE (Guarantees no race conditions)
+            // 2. INJECT ASSETS INLINE & WRAP CONTENT
             if (response.statusCode == 200 &&
                 (path.endsWith('.html') || path.endsWith('.xhtml'))) {
               final bodyBytes = await response.read().toList();
@@ -44,7 +44,7 @@ class EpubService {
                 bodyBytes.expand((x) => x),
               );
 
-              // Inject CSS in Head, JS at end of Body
+              // Prepare Tags
               final String cssTag = '<style>$_cachedCss</style>';
               final String jsTag = '<script>$_cachedJs</script>';
               final String metaTag =
@@ -52,21 +52,38 @@ class EpubService {
 
               String modified = originalBody;
 
-              // Inject Head Items
+              // A. Inject Head Items (Meta + CSS)
               if (modified.contains('<head>')) {
                 modified = modified.replaceFirst(
                   '<head>',
                   '<head>$metaTag$cssTag',
                 );
               } else {
+                // If no head exists, creating one is safer
                 modified = '<head>$metaTag$cssTag</head>$modified';
               }
 
-              // Inject JS (Inline)
-              if (modified.contains('</body>')) {
-                modified = modified.replaceFirst('</body>', '$jsTag</body>');
+              // B. Wrap Body Content in <div id="viewer">
+              // This is CRITICAL for the native scroll fix.
+              // We find the opening <body> tag (handling attributes) and inject the div start.
+              // We find the closing </body> tag and inject the div end + JS.
+
+              if (modified.contains('<body')) {
+                // 1. Insert start <div id="viewer"> after <body>
+                modified = modified.replaceFirstMapped(
+                  RegExp(r'<body[^>]*>', caseSensitive: false),
+                  (match) => '${match.group(0)}<div id="viewer">',
+                );
+
+                // 2. Insert end </div> and JS before </body>
+                modified = modified.replaceFirst(
+                  '</body>',
+                  '</div>$jsTag</body>',
+                );
               } else {
-                modified = '$modified$jsTag';
+                // Fallback for malformed HTML
+                modified =
+                    '<body><div id="viewer">$modified</div>$jsTag</body>';
               }
 
               return Response.ok(
@@ -113,7 +130,7 @@ class EpubService {
 
       return spinePaths.map((path) {
         final cleanPath = rootFolder.isNotEmpty ? '$rootFolder/$path' : path;
-        // Note: No ?v= needed here, ViewModel adds it.
+        // Note: No ?v= needed here, ViewModel adds it if needed.
         return 'http://127.0.0.1:$_port/books/$bookId/raw/$cleanPath';
       }).toList();
     } catch (e) {

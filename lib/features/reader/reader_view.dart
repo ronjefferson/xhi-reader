@@ -16,6 +16,8 @@ class _ReaderViewState extends State<ReaderView> {
   WebViewController? _controller;
 
   bool _showControls = false;
+
+  // Start with loading true. This will cover the initial rendering.
   bool _isLoading = true;
 
   String? _currentUrl;
@@ -39,19 +41,15 @@ class _ReaderViewState extends State<ReaderView> {
     if (mounted) {
       if (_dragValue == null) setState(() {});
 
+      // If URL changed (New Chapter OR Force Refresh from Slider)
       if (_viewModel.epubUrl != null && _viewModel.epubUrl != _currentUrl) {
-        setState(() => _isLoading = true);
+        setState(() => _isLoading = true); // SHOW SPINNER
         _currentUrl = _viewModel.epubUrl;
-
-        if (!_viewModel.epubUrl!.contains('pos=end')) {
-          _viewModel.updateScrollProgress(0.0);
-        }
-
         _controller?.loadRequest(Uri.parse(_currentUrl!));
-      } else if (_viewModel.requestScrollToProgress != null) {
-        _executeScroll(_viewModel.requestScrollToProgress!);
-        _viewModel.requestScrollToProgress = null;
       }
+
+      // Note: We don't need to handle scroll request here anymore because
+      // the URL change handles the flow (Load -> Ready -> Scroll)
     }
   }
 
@@ -59,7 +57,6 @@ class _ReaderViewState extends State<ReaderView> {
     _controller?.runJavaScript('scrollToPercent($percent)');
   }
 
-  // Helper to apply theme to JS
   void _applyTheme() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     _controller?.runJavaScript('setTheme($isDark)');
@@ -67,7 +64,6 @@ class _ReaderViewState extends State<ReaderView> {
 
   @override
   Widget build(BuildContext context) {
-    // Access current theme colors
     final theme = Theme.of(context);
     final bgColor = theme.scaffoldBackgroundColor;
     final txtColor = theme.textTheme.bodyMedium?.color ?? Colors.black;
@@ -83,13 +79,13 @@ class _ReaderViewState extends State<ReaderView> {
     if (_controller == null) _initWebView(bgColor);
 
     return Scaffold(
-      backgroundColor: bgColor, // Dynamic Background
+      backgroundColor: bgColor,
       body: Stack(
         children: [
           // A. THE READER
           SafeArea(child: WebViewWidget(controller: _controller!)),
 
-          // B. LOADING OVERLAY (Matches Theme)
+          // B. LOADING OVERLAY (Hides the "Nudge")
           if (_isLoading)
             Container(
               color: bgColor,
@@ -99,7 +95,7 @@ class _ReaderViewState extends State<ReaderView> {
           // C. CONTROLS (Top Bar)
           AnimatedPositioned(
             duration: const Duration(milliseconds: 200),
-            top: _showControls && !_isLoading ? 0 : -100,
+            top: _showControls ? 0 : -100,
             left: 0,
             right: 0,
             child: Container(
@@ -136,7 +132,7 @@ class _ReaderViewState extends State<ReaderView> {
           // D. CONTROLS (Bottom Bar)
           AnimatedPositioned(
             duration: const Duration(milliseconds: 200),
-            bottom: _showControls && !_isLoading ? 0 : -160,
+            bottom: _showControls ? 0 : -160,
             left: 0,
             right: 0,
             child: Container(
@@ -201,10 +197,11 @@ class _ReaderViewState extends State<ReaderView> {
                             );
                             if (location['chapterIndex'] ==
                                 _viewModel.currentChapterIndex) {
-                              _executeScroll(location['percent']);
+                              // Optional: live preview scroll if desired, but risky if you want full refresh
                             }
                           },
                           onChangeEnd: (val) {
+                            // Trigger the refresh/jump
                             _viewModel.jumpToGlobalPage(val.toInt());
                             setState(() {
                               _dragValue = null;
@@ -234,18 +231,11 @@ class _ReaderViewState extends State<ReaderView> {
     _currentUrl = _viewModel.epubUrl;
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(bgColor) // Set initial Webview color
+      ..setBackgroundColor(bgColor)
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageFinished: (url) {
-            // 1. Apply Theme immediately
-            _applyTheme();
-
-            // 2. Handle scroll position
-            if (_viewModel.requestScrollToProgress != null) {
-              _executeScroll(_viewModel.requestScrollToProgress!);
-              _viewModel.requestScrollToProgress = null;
-            }
+            // Wait for 'ready' message
           },
         ),
       )
@@ -258,9 +248,19 @@ class _ReaderViewState extends State<ReaderView> {
 
   void _handleJsMessage(String message) {
     if (message == 'ready') {
-      // Re-apply theme just in case ready fired late
       _applyTheme();
-      setState(() => _isLoading = false);
+
+      // 1. PERFORM SCROLL (While hidden)
+      if (_viewModel.requestScrollToProgress != null) {
+        _executeScroll(_viewModel.requestScrollToProgress!);
+        _viewModel.requestScrollToProgress = null;
+      }
+
+      // 2. DELAYED REVEAL (The Fix for the "Nudge")
+      // Wait 500ms for the scroll to render properly behind the spinner
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) setState(() => _isLoading = false);
+      });
     } else if (message == 'toggle_controls') {
       setState(() => _showControls = !_showControls);
     } else if (message == 'next_chapter') {
@@ -274,7 +274,8 @@ class _ReaderViewState extends State<ReaderView> {
   }
 
   void _showChapterList() {
-    // Ensure modal uses correct theme colors
+    // ... (Same Chapter List Code as Checkpoint 4) ...
+    // Just ensure it uses the context theme correctly
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bgColor = Theme.of(context).scaffoldBackgroundColor;
     final txtColor =

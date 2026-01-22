@@ -1,40 +1,52 @@
 import 'package:flutter/material.dart';
-// Import the Home Feature
-import 'features/home/home_view.dart';
+import 'features/home/home_view.dart'; // <--- NEW IMPORT
+import 'core/services/theme_service.dart';
 
-void main() {
-  // Required for async plugins (permissions, file access) to work on startup
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  runApp(const MyReaderApp());
+  await ThemeService().loadTheme();
+  runApp(const MyApp());
 }
 
-class MyReaderApp extends StatelessWidget {
-  const MyReaderApp({super.key});
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Reader',
-      debugShowCheckedModeBanner: false,
+    return AnimatedBuilder(
+      animation: ThemeService(),
+      builder: (context, _) {
+        return MaterialApp(
+          title: 'Epub Reader',
+          debugShowCheckedModeBanner: false,
+          theme: ThemeData(
+            brightness: Brightness.light,
+            primarySwatch: Colors.blue,
+            scaffoldBackgroundColor: Colors.white,
+            appBarTheme: const AppBarTheme(
+              backgroundColor: Colors.white,
+              foregroundColor: Colors.black,
+              elevation: 0,
+            ),
+          ),
+          darkTheme: ThemeData(
+            brightness: Brightness.dark,
+            primarySwatch: Colors.blue,
+            scaffoldBackgroundColor: const Color(0xFF121212),
+            appBarTheme: const AppBarTheme(
+              backgroundColor: Color(0xFF1E1E1E),
+              foregroundColor: Colors.white,
+              elevation: 0,
+            ),
+            drawerTheme: const DrawerThemeData(
+              backgroundColor: Color(0xFF1E1E1E),
+            ),
+          ),
+          themeMode: ThemeService().themeMode,
 
-      // Modern Material 3 Theme
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.indigo,
-          brightness: Brightness.light,
-        ),
-        scaffoldBackgroundColor: Colors.grey[50],
-        appBarTheme: const AppBarTheme(
-          elevation: 0,
-          centerTitle: true,
-          scrolledUnderElevation: 0,
-        ),
-      ),
-
-      // Start directly at the Home View
-      home: const HomeView(),
+          home: const HomeView(), // <--- NEW CLASS NAME
+        );
+      },
     );
   }
 }

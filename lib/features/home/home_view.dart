@@ -1,8 +1,10 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'home_viewmodel.dart';
-import '../reader/reader_view.dart';
+
 import '../../models/book_model.dart';
+import '../../core/services/library_service.dart';
+import '../reader/reader_view.dart';
+import '../settings/settings_view.dart';
 
 class HomeView extends StatefulWidget {
   const HomeView({super.key});
@@ -12,95 +14,187 @@ class HomeView extends StatefulWidget {
 }
 
 class _HomeViewState extends State<HomeView> {
-  final HomeViewModel _viewModel = HomeViewModel();
+  List<BookModel> books = [];
+  bool isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _viewModel.loadLibrary();
+    _loadBooks(force: false);
+  }
+
+  Future<void> _loadBooks({bool force = false}) async {
+    setState(() => isLoading = true);
+
+    // Auto-detects books from Downloads folder
+    final loadedBooks = await LibraryService().scanForEpubs(
+      forceRefresh: force,
+    );
+
+    if (mounted) {
+      setState(() {
+        books = loadedBooks;
+        isLoading = false;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: _viewModel,
-      builder: (context, child) {
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text("My Library"),
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.picture_as_pdf),
-                onPressed: _viewModel.importPdf,
-              ),
-            ],
-          ),
-          body: _viewModel.isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : RefreshIndicator(
-                  // 1. Triggers when you pull down
-                  onRefresh: _viewModel.refreshLibrary,
-                  child: GridView.builder(
-                    padding: const EdgeInsets.all(16),
-                    // 2. Physics is required for RefreshIndicator to work on short lists
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 3,
-                          childAspectRatio: 0.65, // Standard book cover ratio
-                          crossAxisSpacing: 12,
-                          mainAxisSpacing: 12,
-                        ),
-                    itemCount: _viewModel.books.length,
-                    itemBuilder: (context, index) {
-                      final book = _viewModel.books[index];
-                      return _buildBookCard(context, book);
-                    },
-                  ),
-                ),
-        );
-      },
-    );
-  }
-
-  Widget _buildBookCard(BuildContext context, BookModel book) {
-    return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (context) => ReaderView(book: book)),
-        );
-      },
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.file(
-                File(book.coverPath),
-                fit: BoxFit.cover,
-                // 3. IMPORTANT: This key forces Flutter to redraw the image
-                // if the file path or timestamp changes (which happens on refresh)
-                key: ValueKey(
-                  "${book.coverPath}_${DateTime.now().millisecondsSinceEpoch}",
-                ),
-                errorBuilder: (c, o, s) => Container(
-                  color: Colors.grey[300],
-                  child: const Icon(Icons.book, size: 40, color: Colors.grey),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            book.title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontWeight: FontWeight.w500),
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          "My Library",
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        actions: [
+          // REFRESH BUTTON: Triggers the auto-detection scan again
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: () => _loadBooks(force: true),
           ),
         ],
       ),
+      // --- SIDEBAR (DRAWER) ---
+      drawer: Drawer(
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            DrawerHeader(
+              decoration: BoxDecoration(color: Theme.of(context).primaryColor),
+              child: const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  CircleAvatar(
+                    radius: 30,
+                    backgroundColor: Colors.white,
+                    child: Icon(Icons.person, size: 40, color: Colors.grey),
+                  ),
+                  SizedBox(height: 10),
+                  Text(
+                    "Reader User",
+                    style: TextStyle(color: Colors.white, fontSize: 18),
+                  ),
+                ],
+              ),
+            ),
+            // 1. Profile Placeholder
+            ListTile(
+              leading: const Icon(Icons.person_outline),
+              title: const Text("Profile"),
+              onTap: () {
+                Navigator.pop(context); // Close drawer
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Profile is coming soon!")),
+                );
+              },
+            ),
+            const Divider(),
+            // 2. Settings
+            ListTile(
+              leading: const Icon(Icons.settings_outlined),
+              title: const Text("Settings"),
+              onTap: () {
+                Navigator.pop(context); // Close drawer
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const SettingsView()),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+      body: isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : books.isEmpty
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Text("No books found."),
+                  const SizedBox(height: 10),
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.refresh),
+                    label: const Text("Scan Downloads"),
+                    onPressed: () => _loadBooks(force: true),
+                  ),
+                ],
+              ),
+            )
+          : GridView.builder(
+              padding: const EdgeInsets.all(16),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 3,
+                childAspectRatio: 0.65,
+                crossAxisSpacing: 16,
+                mainAxisSpacing: 16,
+              ),
+              itemCount: books.length,
+              itemBuilder: (context, index) {
+                final book = books[index];
+                return GestureDetector(
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => ReaderView(book: book),
+                      ),
+                    );
+                  },
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(8),
+                            color: Colors.grey[200],
+                            image:
+                                (book.coverPath.isNotEmpty &&
+                                    File(book.coverPath).existsSync())
+                                ? DecorationImage(
+                                    image: FileImage(File(book.coverPath)),
+                                    fit: BoxFit.cover,
+                                  )
+                                : null,
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.1),
+                                blurRadius: 5,
+                                offset: const Offset(0, 3),
+                              ),
+                            ],
+                          ),
+                          child:
+                              (book.coverPath.isEmpty ||
+                                  !File(book.coverPath).existsSync())
+                              ? const Center(
+                                  child: Icon(
+                                    Icons.book,
+                                    size: 40,
+                                    color: Colors.grey,
+                                  ),
+                                )
+                              : null,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        book.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
     );
   }
 }

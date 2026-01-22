@@ -1,7 +1,22 @@
 (function() {
     // --- UTILS ---
-    // We track scroll manually via Transform
+
     let globalScrollX = 0; 
+    
+    // ... (Keep existing utils) ...
+
+    // --- ADD THIS FUNCTION ---
+    window.setTheme = function(isDark) {
+        if (isDark) {
+            document.documentElement.classList.add('dark-mode');
+            document.body.classList.add('dark-mode');
+        } else {
+            document.documentElement.classList.remove('dark-mode');
+            document.body.classList.remove('dark-mode');
+        }
+    }
+    // We track scroll manually via Transform
+
 
     function getScrollWidth() { 
         return document.body.scrollWidth || document.documentElement.scrollWidth; 

@@ -58,3 +58,19 @@ img, svg, image {
     display: block !important;
     margin: 0 auto !important;
 }
+
+html.dark-mode {
+    background-color: #121212 !important;
+}
+
+body.dark-mode {
+    color: #e0e0e0 !important; /* Soft white text */
+    background-color: #121212 !important;
+}
+
+/* Optional: Slightly dim images in dark mode to reduce glare */
+html.dark-mode img, 
+html.dark-mode svg, 
+html.dark-mode image {
+    opacity: 0.85 !important;
+}

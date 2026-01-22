@@ -16,9 +16,6 @@ class _ReaderViewState extends State<ReaderView> {
   WebViewController? _controller;
 
   bool _showControls = false;
-
-  // --- LOADING STATE ---
-  // Start true so we see spinner immediately
   bool _isLoading = true;
 
   String? _currentUrl;
@@ -43,13 +40,9 @@ class _ReaderViewState extends State<ReaderView> {
       if (_dragValue == null) setState(() {});
 
       if (_viewModel.epubUrl != null && _viewModel.epubUrl != _currentUrl) {
-        // NEW URL LOADING:
-        // 1. Show Spinner
         setState(() => _isLoading = true);
-
         _currentUrl = _viewModel.epubUrl;
 
-        // Reset progress locally
         if (!_viewModel.epubUrl!.contains('pos=end')) {
           _viewModel.updateScrollProgress(0.0);
         }
@@ -66,39 +59,78 @@ class _ReaderViewState extends State<ReaderView> {
     _controller?.runJavaScript('scrollToPercent($percent)');
   }
 
+  // Helper to apply theme to JS
+  void _applyTheme() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    _controller?.runJavaScript('setTheme($isDark)');
+  }
+
   @override
   Widget build(BuildContext context) {
-    // 1. Initial ViewModel Loading
+    // Access current theme colors
+    final theme = Theme.of(context);
+    final bgColor = theme.scaffoldBackgroundColor;
+    final txtColor = theme.textTheme.bodyMedium?.color ?? Colors.black;
+    final isDark = theme.brightness == Brightness.dark;
+
     if (!_viewModel.isReady) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return Scaffold(
+        backgroundColor: bgColor,
+        body: const Center(child: CircularProgressIndicator()),
+      );
     }
 
-    if (_controller == null) _initWebView();
+    if (_controller == null) _initWebView(bgColor);
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: bgColor, // Dynamic Background
       body: Stack(
         children: [
           // A. THE READER
           SafeArea(child: WebViewWidget(controller: _controller!)),
 
-          // B. LOADING SPINNER OVERLAY
-          // Covers the WebView while it loads/scrolls to position
+          // B. LOADING OVERLAY (Matches Theme)
           if (_isLoading)
             Container(
-              color: Colors.white, // Opaque cover
+              color: bgColor,
               child: const Center(child: CircularProgressIndicator()),
             ),
 
           // C. CONTROLS (Top Bar)
           AnimatedPositioned(
             duration: const Duration(milliseconds: 200),
-            top: _showControls && !_isLoading
-                ? 0
-                : -100, // Hide controls while loading
+            top: _showControls && !_isLoading ? 0 : -100,
             left: 0,
             right: 0,
-            child: _buildTopBar(),
+            child: Container(
+              height: kToolbarHeight + MediaQuery.of(context).padding.top,
+              padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top),
+              color: (isDark ? const Color(0xFF1E1E1E) : Colors.white)
+                  .withOpacity(0.95),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: Icon(Icons.arrow_back, color: txtColor),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                  Expanded(
+                    child: Text(
+                      widget.book.title,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: txtColor,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.list, color: txtColor),
+                    onPressed: _showChapterList,
+                  ),
+                ],
+              ),
+            ),
           ),
 
           // D. CONTROLS (Bottom Bar)
@@ -107,28 +139,113 @@ class _ReaderViewState extends State<ReaderView> {
             bottom: _showControls && !_isLoading ? 0 : -160,
             left: 0,
             right: 0,
-            child: _buildBottomBar(),
+            child: Container(
+              color: (isDark ? const Color(0xFF1E1E1E) : Colors.white)
+                  .withOpacity(0.95),
+              padding: const EdgeInsets.fromLTRB(20, 10, 20, 30),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        "Page ${(_dragValue ?? _viewModel.getCurrentGlobalPage()).toInt()} of ${_viewModel.totalBookPages}",
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                          color: txtColor,
+                        ),
+                      ),
+                      Text(
+                        "${(((_dragValue ?? _viewModel.getCurrentGlobalPage().toDouble()) / _viewModel.totalBookPages) * 100).toStringAsFixed(1)}%",
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 5),
+                  Row(
+                    children: [
+                      Text(
+                        "1",
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                      Expanded(
+                        child: Slider(
+                          value:
+                              (_dragValue ??
+                                      _viewModel
+                                          .getCurrentGlobalPage()
+                                          .toDouble())
+                                  .clamp(
+                                    1.0,
+                                    _viewModel.totalBookPages.toDouble(),
+                                  ),
+                          min: 1.0,
+                          max: _viewModel.totalBookPages.toDouble(),
+                          activeColor: isDark ? Colors.white : Colors.black87,
+                          inactiveColor: Colors.grey[300],
+                          onChanged: (val) {
+                            setState(() {
+                              _dragValue = val;
+                            });
+                            final location = _viewModel.getPreviewLocation(
+                              val.toInt(),
+                            );
+                            if (location['chapterIndex'] ==
+                                _viewModel.currentChapterIndex) {
+                              _executeScroll(location['percent']);
+                            }
+                          },
+                          onChangeEnd: (val) {
+                            _viewModel.jumpToGlobalPage(val.toInt());
+                            setState(() {
+                              _dragValue = null;
+                            });
+                          },
+                        ),
+                      ),
+                      Text(
+                        "${_viewModel.totalBookPages}",
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
           ),
         ],
       ),
     );
   }
 
-  void _initWebView() {
+  void _initWebView(Color bgColor) {
     _currentUrl = _viewModel.epubUrl;
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0xFFFFFFFF))
+      ..setBackgroundColor(bgColor) // Set initial Webview color
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageFinished: (url) {
-            // Apply pending scroll (e.g. from slider)
+            // 1. Apply Theme immediately
+            _applyTheme();
+
+            // 2. Handle scroll position
             if (_viewModel.requestScrollToProgress != null) {
               _executeScroll(_viewModel.requestScrollToProgress!);
               _viewModel.requestScrollToProgress = null;
             }
-            // Note: We do NOT set _isLoading = false here.
-            // We wait for the 'ready' message from JS.
           },
         ),
       )
@@ -140,50 +257,54 @@ class _ReaderViewState extends State<ReaderView> {
   }
 
   void _handleJsMessage(String message) {
-    // 1. HANDLE READY SIGNAL
     if (message == 'ready') {
-      setState(() {
-        _isLoading = false; // Hide spinner, show content
-      });
-    }
-    // 2. CONTROLS
-    else if (message == 'toggle_controls') {
+      // Re-apply theme just in case ready fired late
+      _applyTheme();
+      setState(() => _isLoading = false);
+    } else if (message == 'toggle_controls') {
       setState(() => _showControls = !_showControls);
-    }
-    // 3. NAVIGATION
-    else if (message == 'next_chapter') {
+    } else if (message == 'next_chapter') {
       _viewModel.nextChapter();
     } else if (message == 'prev_chapter') {
       _viewModel.previousChapter();
-    }
-    // 4. PROGRESS
-    else if (message.startsWith('progress:')) {
+    } else if (message.startsWith('progress:')) {
       final val = double.tryParse(message.split(':')[1]) ?? 0.0;
       if (_dragValue == null) _viewModel.updateScrollProgress(val);
     }
   }
 
   void _showChapterList() {
+    // Ensure modal uses correct theme colors
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bgColor = Theme.of(context).scaffoldBackgroundColor;
+    final txtColor =
+        Theme.of(context).textTheme.bodyMedium?.color ?? Colors.black;
+
     showModalBottomSheet(
       context: context,
-      backgroundColor: Colors.white,
+      backgroundColor: bgColor,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (context) {
         return Column(
           children: [
-            const Padding(
-              padding: EdgeInsets.all(16.0),
+            Padding(
+              padding: const EdgeInsets.all(16.0),
               child: Text(
                 "Table of Contents",
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: txtColor,
+                ),
               ),
             ),
             Expanded(
               child: ListView.separated(
                 itemCount: _viewModel.chapterTitles.length,
-                separatorBuilder: (c, i) => const Divider(height: 1),
+                separatorBuilder: (c, i) =>
+                    Divider(height: 1, color: Colors.grey.withOpacity(0.3)),
                 itemBuilder: (context, index) {
                   bool isCurrent = index == _viewModel.currentChapterIndex;
                   return ListTile(
@@ -193,7 +314,7 @@ class _ReaderViewState extends State<ReaderView> {
                         fontWeight: isCurrent
                             ? FontWeight.bold
                             : FontWeight.normal,
-                        color: isCurrent ? Colors.blue : Colors.black87,
+                        color: isCurrent ? Colors.blue : txtColor,
                       ),
                     ),
                     trailing: isCurrent
@@ -210,106 +331,6 @@ class _ReaderViewState extends State<ReaderView> {
           ],
         );
       },
-    );
-  }
-
-  Widget _buildTopBar() {
-    return Container(
-      height: kToolbarHeight + MediaQuery.of(context).padding.top,
-      padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top),
-      color: Colors.white.withOpacity(0.95),
-      child: Row(
-        children: [
-          IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () => Navigator.pop(context),
-          ),
-          Expanded(
-            child: Text(
-              widget.book.title,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-            ),
-          ),
-          IconButton(icon: const Icon(Icons.list), onPressed: _showChapterList),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBottomBar() {
-    final double displayValue =
-        _dragValue ?? _viewModel.getCurrentGlobalPage().toDouble();
-    final int totalGlobal = _viewModel.totalBookPages;
-    final String percentStr =
-        "${((displayValue / totalGlobal) * 100).toStringAsFixed(1)}%";
-
-    return Container(
-      color: Colors.white.withOpacity(0.95),
-      padding: const EdgeInsets.fromLTRB(20, 10, 20, 30),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                "Page ${displayValue.toInt()} of $totalGlobal",
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
-                ),
-              ),
-              Text(
-                percentStr,
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
-                  color: Colors.grey,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 5),
-          Row(
-            children: [
-              Text(
-                "1",
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
-              ),
-              Expanded(
-                child: Slider(
-                  value: displayValue.clamp(1.0, totalGlobal.toDouble()),
-                  min: 1.0,
-                  max: totalGlobal.toDouble(),
-                  activeColor: Colors.black87,
-                  inactiveColor: Colors.grey[300],
-                  onChanged: (val) {
-                    setState(() {
-                      _dragValue = val;
-                    });
-                    final location = _viewModel.getPreviewLocation(val.toInt());
-                    if (location['chapterIndex'] ==
-                        _viewModel.currentChapterIndex) {
-                      _executeScroll(location['percent']);
-                    }
-                  },
-                  onChangeEnd: (val) {
-                    _viewModel.jumpToGlobalPage(val.toInt());
-                    setState(() {
-                      _dragValue = null;
-                    });
-                  },
-                ),
-              ),
-              Text(
-                "$totalGlobal",
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
-              ),
-            ],
-          ),
-        ],
-      ),
     );
   }
 }

@@ -62,6 +62,7 @@ dependencies:
   # To generate unique IDs for books in your library
   uuid: ^4.5.1
   image: ^4.1.7
+  shared_preferences: ^2.5.4
 
 dev_dependencies:
   flutter_test:

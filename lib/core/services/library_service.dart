@@ -11,7 +11,7 @@ import 'package:xml/xml.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:pdfrx/pdfrx.dart';
 import 'package:image/image.dart' as img;
-import 'package:shared_preferences/shared_preferences.dart'; // Import this
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../models/book_model.dart';
 
@@ -24,16 +24,10 @@ class LibraryService {
 
   // --- PERMISSIONS ---
   Future<bool> requestPermission() async {
-    // Check if already granted
     if (await Permission.manageExternalStorage.isGranted) return true;
     if (await Permission.storage.isGranted) return true;
-    
-    // Request Manage Storage (Android 11+)
     if (await Permission.manageExternalStorage.request().isGranted) return true;
-    
-    // Request Standard Storage (Android 10 and below)
     if (await Permission.storage.request().isGranted) return true;
-    
     return false;
   }
 
@@ -44,66 +38,89 @@ class LibraryService {
     return dir;
   }
 
-  // --- UPDATE TIMESTAMP ---
+  // --- PROGRESS TRACKING (NEW) ---
+
+  // Save where the user is
+  Future<void> saveProgress(
+    String bookId,
+    int chapterIndex,
+    double progress,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('last_chapter_$bookId', chapterIndex);
+    await prefs.setDouble('last_progress_$bookId', progress);
+
+    // Also update timestamp so it bubbles to top of library
+    await updateLastRead(bookId);
+  }
+
+  // Retrieve where the user was
+  Future<Map<String, dynamic>?> getLastProgress(String bookId) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!prefs.containsKey('last_chapter_$bookId')) return null;
+
+    return {
+      'chapterIndex': prefs.getInt('last_chapter_$bookId') ?? 0,
+      'progress': prefs.getDouble('last_progress_$bookId') ?? 0.0,
+    };
+  }
+
   Future<void> updateLastRead(String bookId) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('last_read_$bookId', DateTime.now().millisecondsSinceEpoch);
+    await prefs.setInt(
+      'last_read_$bookId',
+      DateTime.now().millisecondsSinceEpoch,
+    );
   }
 
   // --- MAIN SCAN METHOD ---
   Future<List<BookModel>> scanForEpubs({bool forceRefresh = false}) async {
-    // 1. Permission Check
-    if (!await requestPermission()) {
-      debugPrint("Permission denied");
-      return []; 
-    }
+    if (!await requestPermission()) return [];
 
-    final prefs = await SharedPreferences.getInstance(); // Load Prefs
+    final prefs = await SharedPreferences.getInstance();
     List<BookModel> books = [];
 
-    // 2. Scan Downloads Folder
     try {
-      final downloadsPath = await ExternalPath.getExternalStoragePublicDirectory("Download");
+      final downloadsPath =
+          await ExternalPath.getExternalStoragePublicDirectory("Download");
       final downloadsDir = Directory(downloadsPath);
       final appDataDir = await _getAppDataDirectory();
 
       if (downloadsDir.existsSync()) {
         List<FileSystemEntity> files = downloadsDir.listSync();
-        
+
         for (var entity in files) {
           if (entity is File && p.extension(entity.path) == '.epub') {
             final fileName = p.basenameWithoutExtension(entity.path);
             final bookId = fileName.replaceAll(RegExp(r'\s+'), '_');
-            
-            // Set up Internal Paths for Cover/Data
+
             final bookDataDir = Directory('${appDataDir.path}/$bookId');
             final coverFile = File('${bookDataDir.path}/cover.png');
 
-            // Processing Check
-            bool needsProcessing = !await bookDataDir.exists() || !await coverFile.exists() || forceRefresh;
+            bool needsProcessing =
+                !await bookDataDir.exists() ||
+                !await coverFile.exists() ||
+                forceRefresh;
 
             if (needsProcessing) {
               await bookDataDir.create(recursive: true);
-              // We create the cover, but we KEEP using the original file path for reading
               await _extractEpubCover(entity, coverFile);
             }
 
-            // Get Last Read Time
             final lastReadMillis = prefs.getInt('last_read_$bookId');
-            final lastRead = lastReadMillis != null 
-                ? DateTime.fromMillisecondsSinceEpoch(lastReadMillis) 
+            final lastRead = lastReadMillis != null
+                ? DateTime.fromMillisecondsSinceEpoch(lastReadMillis)
                 : null;
 
-            // ADD TO LIST IMMEDIATELY (Original Logic)
             books.add(
               BookModel(
                 id: bookId,
                 title: fileName,
-                filePath: entity.path, // Use the Download path
+                filePath: entity.path,
                 coverPath: coverFile.path,
                 type: BookType.epub,
                 author: "Unknown",
-                lastRead: lastRead, // <--- Add Timestamp
+                lastRead: lastRead,
               ),
             );
           }
@@ -113,10 +130,9 @@ class LibraryService {
       debugPrint("Error scanning downloads: $e");
     }
 
-    // 3. Add Imported PDFs (Merging lists)
-    books.addAll(await _scanImportedPdfs(prefs)); // Pass prefs helper
+    books.addAll(await _scanImportedPdfs(prefs));
 
-    // 4. SORT (Recent First)
+    // Sort Recent First
     books.sort((a, b) {
       if (b.lastRead == null) return -1;
       if (a.lastRead == null) return 1;
@@ -126,7 +142,11 @@ class LibraryService {
     return books;
   }
 
-  /// IMPORT PDF (Kept mostly same)
+  // ... (Import PDF, Scan PDFs, Cover Gen logic remains unchanged) ...
+  // To keep the file short, I assume you have the rest of the file from Checkpoint 4/5.
+  // If you need the full file again, let me know, but adding the 2 methods above is sufficient.
+
+  // --- HELPERS (Copied for completeness if you paste the whole thing) ---
   Future<void> importPdf() async {
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
@@ -140,15 +160,17 @@ class LibraryService {
       final appDataDir = await _getAppDataDirectory();
       final bookDataDir = Directory('${appDataDir.path}/$bookId');
 
-      if (!await bookDataDir.exists()) await bookDataDir.create(recursive: true);
+      if (!await bookDataDir.exists())
+        await bookDataDir.create(recursive: true);
 
-      final savedPdf = await originalPdf.copy('${bookDataDir.path}/$fileName.pdf');
+      final savedPdf = await originalPdf.copy(
+        '${bookDataDir.path}/$fileName.pdf',
+      );
       final coverFile = File('${bookDataDir.path}/cover.png');
       await _generatePdfCover(savedPdf, coverFile);
     }
   }
 
-  /// Helper: Load internal PDFs
   Future<List<BookModel>> _scanImportedPdfs(SharedPreferences prefs) async {
     final appDataDir = await _getAppDataDirectory();
     List<BookModel> pdfs = [];
@@ -166,11 +188,9 @@ class LibraryService {
           }
           if (pdfFile != null && coverFile != null) {
             final id = p.basename(folder.path);
-            
-            // Get Timestamp
             final lastReadMillis = prefs.getInt('last_read_$id');
-            final lastRead = lastReadMillis != null 
-                ? DateTime.fromMillisecondsSinceEpoch(lastReadMillis) 
+            final lastRead = lastReadMillis != null
+                ? DateTime.fromMillisecondsSinceEpoch(lastReadMillis)
                 : null;
 
             pdfs.add(
@@ -191,9 +211,6 @@ class LibraryService {
     return pdfs;
   }
 
-  // ---------------------------------------------------------
-  // 🎨 PDF COVER LOGIC
-  // ---------------------------------------------------------
   Future<void> _generatePdfCover(File pdfFile, File targetCoverFile) async {
     try {
       final doc = await PdfDocument.openFile(pdfFile.path);
@@ -202,7 +219,6 @@ class LibraryService {
         width: 300,
         height: (300 * page.height / page.width).toInt(),
       );
-
       if (rawPdfImage != null) {
         final img.Image image = img.Image.fromBytes(
           width: rawPdfImage.width,
@@ -211,8 +227,7 @@ class LibraryService {
           order: img.ChannelOrder.rgba,
           numChannels: 4,
         );
-        final Uint8List pngBytes = img.encodePng(image);
-        await targetCoverFile.writeAsBytes(pngBytes);
+        await targetCoverFile.writeAsBytes(img.encodePng(image));
       }
       await doc.dispose();
     } catch (e) {
@@ -220,57 +235,57 @@ class LibraryService {
     }
   }
 
-  // ---------------------------------------------------------
-  // 🎨 EPUB COVER LOGIC
-  // ---------------------------------------------------------
   Future<void> _extractEpubCover(File epubFile, File targetCoverFile) async {
     try {
       final bytes = await epubFile.readAsBytes();
       final archive = ZipDecoder().decodeBytes(bytes);
-
       ArchiveFile? containerFile = archive.files.firstWhere(
         (f) => f.name.contains('container.xml'),
         orElse: () => archive.files.first,
       );
-      final containerXml = XmlDocument.parse(utf8.decode(containerFile.content as List<int>));
-      final rootPath = containerXml.findAllElements('rootfile').first.getAttribute('full-path')!;
-
+      final containerXml = XmlDocument.parse(
+        utf8.decode(containerFile.content as List<int>),
+      );
+      final rootPath = containerXml
+          .findAllElements('rootfile')
+          .first
+          .getAttribute('full-path')!;
       ArchiveFile? opfFile = archive.files.firstWhere(
         (f) => f.name.contains(rootPath),
         orElse: () => archive.files.first,
       );
-      final opfXml = XmlDocument.parse(utf8.decode(opfFile.content as List<int>));
-
+      final opfXml = XmlDocument.parse(
+        utf8.decode(opfFile.content as List<int>),
+      );
       String? coverHref;
-
-      // Layer 1
       String? coverId;
       for (var meta in opfXml.findAllElements('meta')) {
-        if (meta.getAttribute('name') == 'cover') coverId = meta.getAttribute('content');
+        if (meta.getAttribute('name') == 'cover')
+          coverId = meta.getAttribute('content');
       }
       if (coverId != null) {
         for (var item in opfXml.findAllElements('item')) {
-          if (item.getAttribute('id') == coverId) coverHref = item.getAttribute('href');
+          if (item.getAttribute('id') == coverId)
+            coverHref = item.getAttribute('href');
         }
       }
-
-      // Layer 2
       if (coverHref == null) {
         try {
           final possible = archive.files.firstWhere(
-            (f) => f.name.toLowerCase().contains('cover') && 
-                   (f.name.endsWith('.jpg') || f.name.endsWith('.png')),
+            (f) =>
+                f.name.toLowerCase().contains('cover') &&
+                (f.name.endsWith('.jpg') || f.name.endsWith('.png')),
           );
           coverHref = possible.name;
         } catch (_) {}
       }
-
       if (coverHref != null) {
         coverHref = Uri.decodeFull(coverHref);
         final coverFilename = p.basename(coverHref);
         final imageFile = archive.files.firstWhere(
-           (f) => f.name.endsWith(coverFilename),
-           orElse: () => archive.files.firstWhere((f) => f.name.endsWith('cover.jpg')),
+          (f) => f.name.endsWith(coverFilename),
+          orElse: () =>
+              archive.files.firstWhere((f) => f.name.endsWith('cover.jpg')),
         );
         await targetCoverFile.writeAsBytes(imageFile.content as List<int>);
       }

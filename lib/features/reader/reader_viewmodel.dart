@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import '../../models/book_model.dart';
 import '../../core/services/epub_service.dart';
+import '../../core/services/library_service.dart'; // Import LibraryService
 
 class ReaderViewModel extends ChangeNotifier {
   final BookModel book;
@@ -44,12 +45,33 @@ class ReaderViewModel extends ChangeNotifier {
         appDocPath,
       );
 
-      // Calculate Pages AND Extract Smart Titles
       await _calculateADEPageCounts(book.id, appDocPath);
 
       if (spine.isNotEmpty) {
-        currentChapterIndex = 0;
-        _updateUrl(spine[0]);
+        // --- RESTORE SAVED PROGRESS ---
+        final savedData = await LibraryService().getLastProgress(book.id);
+
+        if (savedData != null) {
+          int savedIndex = savedData['chapterIndex'];
+          // Validate index
+          if (savedIndex >= 0 && savedIndex < spine.length) {
+            currentChapterIndex = savedIndex;
+            // Restore percent (clamped)
+            double savedPercent = (savedData['progress'] as double).clamp(
+              0.0,
+              1.0,
+            );
+            if (savedPercent > 0) {
+              requestScrollToProgress = savedPercent;
+            }
+          } else {
+            currentChapterIndex = 0;
+          }
+        } else {
+          currentChapterIndex = 0;
+        }
+
+        _updateUrl(spine[currentChapterIndex]);
         isReady = true;
         notifyListeners();
       } else {
@@ -88,6 +110,8 @@ class ReaderViewModel extends ChangeNotifier {
       _updateUrl(spine[currentChapterIndex]);
       requestScrollToProgress = 0.0;
       notifyListeners();
+      // SAVE PROGRESS: Start of new chapter
+      LibraryService().saveProgress(book.id, currentChapterIndex, 0.0);
     }
   }
 
@@ -97,6 +121,8 @@ class ReaderViewModel extends ChangeNotifier {
       _updateUrl(spine[currentChapterIndex], posEnd: true);
       requestScrollToProgress = 1.0;
       notifyListeners();
+      // SAVE PROGRESS: End of previous chapter
+      LibraryService().saveProgress(book.id, currentChapterIndex, 1.0);
     }
   }
 
@@ -106,6 +132,8 @@ class ReaderViewModel extends ChangeNotifier {
       _updateUrl(spine[index]);
       requestScrollToProgress = 0.0;
       notifyListeners();
+      // SAVE PROGRESS: Start of jumped chapter
+      LibraryService().saveProgress(book.id, currentChapterIndex, 0.0);
     }
   }
 
@@ -119,20 +147,21 @@ class ReaderViewModel extends ChangeNotifier {
         int localPage = globalPage - start;
         double percent = (localPage - 1) / (count > 1 ? count - 1 : 1);
 
-        // Sanitize percent
         percent = percent.clamp(0.0, 1.0);
         if (percent.isNaN || percent.isInfinite) percent = 0.0;
 
         if (currentChapterIndex == i) {
-          // Same Chapter: Just Scroll
           requestScrollToProgress = percent;
           notifyListeners();
+          // SAVE PROGRESS: Same chapter scroll
+          LibraryService().saveProgress(book.id, currentChapterIndex, percent);
         } else {
-          // New Chapter: Load it
           currentChapterIndex = i;
           _updateUrl(spine[i]);
           requestScrollToProgress = percent;
           notifyListeners();
+          // SAVE PROGRESS: New chapter load
+          LibraryService().saveProgress(book.id, currentChapterIndex, percent);
         }
         return;
       }
@@ -154,56 +183,39 @@ class ReaderViewModel extends ChangeNotifier {
       String localPath = "$appDocPath${uri.path}";
       int pages = await EpubService().countPagesForChapter(localPath);
 
-      // --- SMART TITLE LOGIC ---
-      // 1. Start with "Section X"
       String title = "Section ${index + 1}";
-
       File file = File(localPath);
       if (await file.exists()) {
         try {
           String content = await file.readAsString();
-
-          String? extracted;
-
-          // 2. Look for H1 (Most reliable)
           var h1 = RegExp(
             r'<h1[^>]*>(.*?)</h1>',
             caseSensitive: false,
             dotAll: true,
           ).firstMatch(content);
           if (h1 != null) {
-            extracted = h1.group(1);
+            String clean = _stripHtml(h1.group(1)!);
+            if (clean.trim().isNotEmpty && clean.length < 100) title = clean;
           } else {
-            // 3. Fallback to H2 if no H1
             var h2 = RegExp(
               r'<h2[^>]*>(.*?)</h2>',
               caseSensitive: false,
               dotAll: true,
             ).firstMatch(content);
-            if (h2 != null) extracted = h2.group(1);
-          }
-
-          // Apply extracted title if valid
-          if (extracted != null) {
-            String clean = _stripHtml(extracted);
-            if (clean.trim().isNotEmpty && clean.length < 100) {
-              title = clean;
+            if (h2 != null) {
+              String clean = _stripHtml(h2.group(1)!);
+              if (clean.trim().isNotEmpty && clean.length < 100) title = clean;
             }
           }
 
-          // 4. Illustration Detection (Only if still default "Section X")
           if (title.startsWith("Section")) {
             bool hasImage =
                 content.contains('<img') ||
                 content.contains('<svg') ||
                 content.contains('<image');
-            if (content.length < 1500 && hasImage) {
-              title = "Illustration";
-            }
+            if (content.length < 1500 && hasImage) title = "Illustration";
           }
-        } catch (e) {
-          // Keep default if file read fails
-        }
+        } catch (e) {}
       }
 
       chapterTitles.add(title);
@@ -222,21 +234,15 @@ class ReaderViewModel extends ChangeNotifier {
 
   int getCurrentGlobalPage() {
     if (_chapterPageCounts.isEmpty) return 1;
-
-    // Safety Check: Index out of bounds
     if (currentChapterIndex < 0 ||
-        currentChapterIndex >= _cumulativePageCounts.length) {
+        currentChapterIndex >= _cumulativePageCounts.length)
       return 1;
-    }
 
     int start = _cumulativePageCounts[currentChapterIndex];
     int count = _chapterPageCounts[currentChapterIndex];
 
-    // Sanitize potential NaN/Infinity from JS
     double safeProgress = _currentChapterProgress;
-    if (safeProgress.isNaN || safeProgress.isInfinite) {
-      safeProgress = 0.0;
-    }
+    if (safeProgress.isNaN || safeProgress.isInfinite) safeProgress = 0.0;
 
     int pagesIn = (safeProgress * count).round();
     if (pagesIn >= count) pagesIn = count - 1;
@@ -252,11 +258,8 @@ class ReaderViewModel extends ChangeNotifier {
       if (globalPage <= start + count) {
         int localPage = globalPage - start;
         double percent = (localPage - 1) / (count > 1 ? count - 1 : 1);
-
-        // Sanitize
         percent = percent.clamp(0.0, 1.0);
         if (percent.isNaN || percent.isInfinite) percent = 0.0;
-
         return {'chapterIndex': i, 'percent': percent};
       }
     }
@@ -267,6 +270,9 @@ class ReaderViewModel extends ChangeNotifier {
     if (progress.isNaN || progress.isInfinite) progress = 0.0;
     _currentChapterProgress = progress;
     notifyListeners();
+
+    // SAVE PROGRESS: User swiped/scrolled to a new spot
+    LibraryService().saveProgress(book.id, currentChapterIndex, progress);
   }
 
   bool get hasNext => currentChapterIndex < spine.length - 1;

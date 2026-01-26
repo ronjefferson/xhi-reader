@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:permission_handler/permission_handler.dart';
@@ -38,9 +37,8 @@ class LibraryService {
     return dir;
   }
 
-  // --- PROGRESS TRACKING (NEW) ---
+  // --- PROGRESS TRACKING ---
 
-  // Save where the user is
   Future<void> saveProgress(
     String bookId,
     int chapterIndex,
@@ -49,12 +47,9 @@ class LibraryService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('last_chapter_$bookId', chapterIndex);
     await prefs.setDouble('last_progress_$bookId', progress);
-
-    // Also update timestamp so it bubbles to top of library
     await updateLastRead(bookId);
   }
 
-  // Retrieve where the user was
   Future<Map<String, dynamic>?> getLastProgress(String bookId) async {
     final prefs = await SharedPreferences.getInstance();
     if (!prefs.containsKey('last_chapter_$bookId')) return null;
@@ -116,9 +111,9 @@ class LibraryService {
               BookModel(
                 id: bookId,
                 title: fileName,
-                filePath: entity.path,
+                filePath: entity.path, // Store local path
                 coverPath: coverFile.path,
-                type: BookType.epub,
+                isLocal: true, // Mark as local
                 author: "Unknown",
                 lastRead: lastRead,
               ),
@@ -142,11 +137,7 @@ class LibraryService {
     return books;
   }
 
-  // ... (Import PDF, Scan PDFs, Cover Gen logic remains unchanged) ...
-  // To keep the file short, I assume you have the rest of the file from Checkpoint 4/5.
-  // If you need the full file again, let me know, but adding the 2 methods above is sufficient.
-
-  // --- HELPERS (Copied for completeness if you paste the whole thing) ---
+  // --- PDF IMPORT ---
   Future<void> importPdf() async {
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
@@ -199,7 +190,7 @@ class LibraryService {
                 title: p.basenameWithoutExtension(pdfFile.path),
                 filePath: pdfFile.path,
                 coverPath: coverFile.path,
-                type: BookType.pdf,
+                isLocal: true,
                 author: "Unknown",
                 lastRead: lastRead,
               ),
@@ -211,6 +202,7 @@ class LibraryService {
     return pdfs;
   }
 
+  // --- HELPERS ---
   Future<void> _generatePdfCover(File pdfFile, File targetCoverFile) async {
     try {
       final doc = await PdfDocument.openFile(pdfFile.path);

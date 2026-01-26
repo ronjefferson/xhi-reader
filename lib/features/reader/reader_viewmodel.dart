@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import '../../models/book_model.dart';
 import '../../core/services/epub_service.dart';
-import '../../core/services/library_service.dart'; // Import LibraryService
+import '../../core/services/library_service.dart';
 
 class ReaderViewModel extends ChangeNotifier {
   final BookModel book;
@@ -34,13 +34,30 @@ class ReaderViewModel extends ChangeNotifier {
 
   Future<void> initializeReader() async {
     try {
+      // 1. SAFETY CHECK: Ensure we can read this book
+      if (book.isLocal && book.filePath == null) {
+        errorMessage = "Error: Local book path is missing.";
+        isReady = true;
+        notifyListeners();
+        return;
+      }
+
+      if (!book.isLocal) {
+        // Placeholder for Online Reader
+        errorMessage = "Online Reader not implemented yet.";
+        isReady = true;
+        notifyListeners();
+        return;
+      }
+
+      // --- LOCAL FILE LOGIC ---
       final directory = await getApplicationDocumentsDirectory();
       final appDocPath = directory.path;
 
       await EpubService().startServer(appDocPath);
 
       spine = await EpubService().getSpineUrls(
-        File(book.filePath),
+        File(book.filePath!), // Safe because we checked isLocal
         book.id,
         appDocPath,
       );
@@ -53,10 +70,8 @@ class ReaderViewModel extends ChangeNotifier {
 
         if (savedData != null) {
           int savedIndex = savedData['chapterIndex'];
-          // Validate index
           if (savedIndex >= 0 && savedIndex < spine.length) {
             currentChapterIndex = savedIndex;
-            // Restore percent (clamped)
             double savedPercent = (savedData['progress'] as double).clamp(
               0.0,
               1.0,
@@ -110,7 +125,6 @@ class ReaderViewModel extends ChangeNotifier {
       _updateUrl(spine[currentChapterIndex]);
       requestScrollToProgress = 0.0;
       notifyListeners();
-      // SAVE PROGRESS: Start of new chapter
       LibraryService().saveProgress(book.id, currentChapterIndex, 0.0);
     }
   }
@@ -121,7 +135,6 @@ class ReaderViewModel extends ChangeNotifier {
       _updateUrl(spine[currentChapterIndex], posEnd: true);
       requestScrollToProgress = 1.0;
       notifyListeners();
-      // SAVE PROGRESS: End of previous chapter
       LibraryService().saveProgress(book.id, currentChapterIndex, 1.0);
     }
   }
@@ -132,7 +145,6 @@ class ReaderViewModel extends ChangeNotifier {
       _updateUrl(spine[index]);
       requestScrollToProgress = 0.0;
       notifyListeners();
-      // SAVE PROGRESS: Start of jumped chapter
       LibraryService().saveProgress(book.id, currentChapterIndex, 0.0);
     }
   }
@@ -153,14 +165,12 @@ class ReaderViewModel extends ChangeNotifier {
         if (currentChapterIndex == i) {
           requestScrollToProgress = percent;
           notifyListeners();
-          // SAVE PROGRESS: Same chapter scroll
           LibraryService().saveProgress(book.id, currentChapterIndex, percent);
         } else {
           currentChapterIndex = i;
           _updateUrl(spine[i]);
           requestScrollToProgress = percent;
           notifyListeners();
-          // SAVE PROGRESS: New chapter load
           LibraryService().saveProgress(book.id, currentChapterIndex, percent);
         }
         return;
@@ -271,7 +281,7 @@ class ReaderViewModel extends ChangeNotifier {
     _currentChapterProgress = progress;
     notifyListeners();
 
-    // SAVE PROGRESS: User swiped/scrolled to a new spot
+    // SAVE PROGRESS
     LibraryService().saveProgress(book.id, currentChapterIndex, progress);
   }
 

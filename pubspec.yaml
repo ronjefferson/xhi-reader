@@ -64,6 +64,10 @@ dependencies:
   image: ^4.1.7
   shared_preferences: ^2.5.4
 
+  http: ^1.2.0
+
+  cached_network_image: ^3.3.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

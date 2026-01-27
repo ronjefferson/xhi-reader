@@ -121,8 +121,11 @@ class _HomeViewState extends State<HomeView>
   }
 
   void _handleProfileTap() async {
-    // If coming from Drawer, close it.
-    if (Scaffold.of(context).isDrawerOpen) Navigator.pop(context);
+    // --- FIX START ---
+    // Removed the "Scaffold.of(context).isDrawerOpen" check.
+    // It was causing a crash because this context cannot find the Scaffold.
+    // The Drawer already closes itself in _buildDrawer via Navigator.pop(context).
+    // --- FIX END ---
 
     if (AuthService().isLoggedIn) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -244,7 +247,7 @@ class _HomeViewState extends State<HomeView>
               leading: Icon(isLoggedIn ? Icons.person : Icons.login),
               title: Text(isLoggedIn ? "Profile" : "Login"),
               onTap: () {
-                Navigator.pop(context); // Close Drawer
+                Navigator.pop(context); // This closes the Drawer
                 _handleProfileTap();
               },
             ),

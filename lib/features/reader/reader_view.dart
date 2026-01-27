@@ -1,8 +1,10 @@
 import 'dart:async';
-import 'dart:convert'; // Required for Base64 safety
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:http/http.dart' as http; // <--- REQUIRED IMPORT
+
 import 'reader_viewmodel.dart';
 import '../../models/book_model.dart';
 import '../../core/services/auth_service.dart';
@@ -44,15 +46,59 @@ class _ReaderViewState extends State<ReaderView> {
     if (mounted) {
       if (_dragValue == null) setState(() {});
 
+      // IF URL CHANGED
       if (_viewModel.epubUrl != null && _viewModel.epubUrl != _currentUrl) {
-        _startLoading();
         _currentUrl = _viewModel.epubUrl;
 
-        _controller?.loadRequest(
-          Uri.parse(_currentUrl!),
-          headers: _getAuthHeaders(),
-        );
+        // Use our smart loader instead of basic loadRequest
+        _loadContentWithAuthRetry(_currentUrl!);
       }
+    }
+  }
+
+  // --- NEW: SMART LOADER WITH SILENT REFRESH ---
+  Future<void> _loadContentWithAuthRetry(String url) async {
+    _startLoading();
+
+    // 1. If Local, just load it normally
+    if (widget.book.isLocal) {
+      _controller?.loadRequest(Uri.parse(url));
+      return;
+    }
+
+    // 2. If Online, Fetch with Dart first to handle Auth
+    try {
+      var headers = _getAuthHeaders();
+      var response = await http.get(Uri.parse(url), headers: headers);
+
+      // A. TOKEN EXPIRED? (401)
+      if (response.statusCode == 401) {
+        print("ReaderView: Token Expired (401). Attempting Silent Refresh...");
+
+        final refreshed = await AuthService().tryRefreshToken();
+
+        if (refreshed) {
+          print("ReaderView: Refresh Success! Retrying request...");
+          // Retry with NEW token
+          headers = _getAuthHeaders();
+          response = await http.get(Uri.parse(url), headers: headers);
+        } else {
+          print("ReaderView: Refresh Failed. User session died.");
+          // Optional: Navigate to login or show error
+        }
+      }
+
+      // B. SUCCESS? (200)
+      if (response.statusCode == 200) {
+        // Load the HTML string directly.
+        // baseUrl is CRITICAL: it tells the WebView where to find relative images (../images/1.png)
+        _controller?.loadHtmlString(response.body, baseUrl: url);
+      } else {
+        print("ReaderView Error: Server returned ${response.statusCode}");
+        // Optional: Show error UI
+      }
+    } catch (e) {
+      print("ReaderView Network Error: $e");
     }
   }
 
@@ -61,6 +107,7 @@ class _ReaderViewState extends State<ReaderView> {
     _spinnerSafetyTimer?.cancel();
     _spinnerSafetyTimer = Timer(const Duration(seconds: 3), () {
       if (mounted && _isLoading) {
+        print("Safety Timer: JS ready signal missing. Hiding spinner.");
         setState(() => _isLoading = false);
       }
     });
@@ -229,15 +276,13 @@ class _ReaderViewState extends State<ReaderView> {
   }
 
   void _initWebView(Color bgColor) {
-    _startLoading();
-    _currentUrl = _viewModel.epubUrl;
-
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(bgColor)
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageFinished: (url) {
+            // FIX: Only inject scripts if online
             if (!widget.book.isLocal) {
               _injectOnlineAssets();
             }
@@ -251,15 +296,23 @@ class _ReaderViewState extends State<ReaderView> {
       ..addJavaScriptChannel(
         'PrintReader',
         onMessageReceived: (m) => _handleJsMessage(m.message),
-      )
-      ..loadRequest(Uri.parse(_currentUrl!), headers: _getAuthHeaders());
+      );
+
+    // NOTE: We do NOT call loadRequest here anymore for online books.
+    // _onViewModelUpdate will handle the first load via _loadContentWithAuthRetry.
+    if (widget.book.isLocal) {
+      _controller?.loadRequest(Uri.parse(_viewModel.epubUrl ?? ''));
+    }
   }
 
-  // --- SAFE BASE64 INJECTION ---
+  // --- SAFE BASE64 INJECTION WITH IMAGE FIXER ---
   void _injectOnlineAssets() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bgHex = isDark ? '#121212' : '#FFFFFF';
     final textHex = isDark ? '#E0E0E0' : '#000000';
+
+    // NOTE: This now gets the FRESH token because we refreshed it before loading!
+    final token = AuthService().token ?? '';
 
     // 1. RAW CSS
     const String rawCss = r'''
@@ -285,7 +338,7 @@ class _ReaderViewState extends State<ReaderView> {
       body.dark-mode { color: #e0e0e0 !important; background-color: #121212 !important; }
     ''';
 
-    // 2. RAW JS (ONE PAGE MAX LOGIC)
+    // 2. RAW JS (Includes Capitalization Fix)
     const String rawJs = r'''
       (function() {
           function post(msg) { if(window.PrintReader) window.PrintReader.postMessage(msg); }
@@ -304,14 +357,43 @@ class _ReaderViewState extends State<ReaderView> {
           }
           window.globalScrollX = 0;
 
-          function init() {
+          function fixImages() {
+              let token = window.AUTH_TOKEN || ''; 
               let imgs = document.getElementsByTagName('img');
+              
               for(let i=0; i<imgs.length; i++) {
                 let src = imgs[i].src;
+                let originalSrc = src;
+
+                // 1. Fix Emulator IP
                 if (src.includes('localhost') || src.includes('127.0.0.1')) {
-                  imgs[i].src = src.replace('localhost', '10.0.2.2').replace('127.0.0.1', '10.0.2.2');
+                  src = src.replace('localhost', '10.0.2.2').replace('127.0.0.1', '10.0.2.2');
+                }
+                
+                // 2. Fix Capitalization
+                if (src.includes('/Images/')) {
+                   src = src.replace('/Images/', '/images/');
+                }
+
+                // 3. Append Auth Token
+                if (token && !src.includes('token=')) {
+                    let separator = src.includes('?') ? '&' : '?';
+                    src = src + separator + 'token=' + token;
+                }
+                
+                // 4. Force Reload
+                if (src !== originalSrc) {
+                   imgs[i].src = src;
                 }
               }
+          }
+
+          function init() {
+              fixImages();
+              // Safety retries
+              setTimeout(fixImages, 500);
+              setTimeout(fixImages, 1500);
+
               const w = getWidth();
               const params = new URLSearchParams(window.location.search);
               if (params.get('pos') === 'end') {
@@ -322,27 +404,23 @@ class _ReaderViewState extends State<ReaderView> {
               setTimeout(function(){ post('ready'); }, 200);
           }
 
-          // TOUCH LOGIC
+          // TOUCH HANDLERS
           let startX = 0; 
-          let startScroll = 0; 
           let isDragging = false;
-          let startPage = 0; // Tracks which page we started on
+          let startPage = 0; 
 
           window.addEventListener('touchstart', function(e) {
               startX = e.touches[0].clientX;
-              startScroll = window.globalScrollX || 0;
-              
-              // IMPORTANT: Lock the "Start Page"
-              startPage = Math.round(startScroll / getWidth());
-              
               isDragging = true;
+              const w = getWidth();
+              startPage = Math.round((window.globalScrollX || 0) / w);
           }, {passive: false});
 
           window.addEventListener('touchmove', function(e) {
               if (!isDragging) return;
               const diff = startX - e.touches[0].clientX;
               if (e.cancelable) e.preventDefault();
-              setScroll(startScroll + diff);
+              setScroll((startPage * getWidth()) + diff);
           }, {passive: false});
 
           window.addEventListener('touchend', function(e) {
@@ -353,16 +431,11 @@ class _ReaderViewState extends State<ReaderView> {
               
               if (Math.abs(diff) < 10) { post('toggle_controls'); return; }
 
-              // FIX: Base target on startPage, NOT current scroll position
-              // This guarantees we only move 1 page max from where we started.
               let targetPage = startPage;
-
-              if (diff > 50) targetPage = startPage + 1; // Next
-              else if (diff < -50) targetPage = startPage - 1; // Prev
-              else targetPage = startPage; // Snap back if swipe too small
+              if (diff > 50) targetPage = startPage + 1; 
+              else if (diff < -50) targetPage = startPage - 1; 
 
               const maxPage = Math.ceil(getScrollWidth() / w) - 1;
-              
               if (targetPage < 0) { 
                  const params = new URLSearchParams(window.location.search);
                  if (params.get('isFirst') !== 'true') { post('prev_chapter'); return; }
@@ -393,16 +466,17 @@ class _ReaderViewState extends State<ReaderView> {
               requestAnimationFrame(step);
           }
 
-          if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
-          else init();
+          init();
       })();
     ''';
 
-    // 3. BASE64 ENCODING INJECTION
+    // 3. BASE64 ENCODING
     String cssBase64 = base64Encode(utf8.encode(rawCss));
     String jsBase64 = base64Encode(utf8.encode(rawJs));
 
     _controller?.runJavaScript('''
+      window.AUTH_TOKEN = "$token";
+      
       var style = document.createElement('style');
       style.innerHTML = decodeURIComponent(escape(window.atob('$cssBase64')));
       document.head.appendChild(style);

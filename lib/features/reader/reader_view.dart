@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-import 'package:http/http.dart' as http; // <--- REQUIRED IMPORT
+import 'package:http/http.dart' as http;
 
 import 'reader_viewmodel.dart';
 import '../../models/book_model.dart';
@@ -25,6 +25,8 @@ class _ReaderViewState extends State<ReaderView> {
   bool _showControls = false;
   bool _isLoading = true;
   String? _currentUrl;
+
+  // This value is non-null ONLY while the user is dragging the slider
   double? _dragValue;
 
   @override
@@ -44,61 +46,43 @@ class _ReaderViewState extends State<ReaderView> {
 
   void _onViewModelUpdate() {
     if (mounted) {
+      // Only rebuild if NOT dragging (dragging handles its own UI updates)
       if (_dragValue == null) setState(() {});
 
-      // IF URL CHANGED
       if (_viewModel.epubUrl != null && _viewModel.epubUrl != _currentUrl) {
         _currentUrl = _viewModel.epubUrl;
-
-        // Use our smart loader instead of basic loadRequest
         _loadContentWithAuthRetry(_currentUrl!);
       }
     }
   }
 
-  // --- NEW: SMART LOADER WITH SILENT REFRESH ---
   Future<void> _loadContentWithAuthRetry(String url) async {
     _startLoading();
 
-    // 1. If Local, just load it normally
     if (widget.book.isLocal) {
       _controller?.loadRequest(Uri.parse(url));
       return;
     }
 
-    // 2. If Online, Fetch with Dart first to handle Auth
     try {
       var headers = _getAuthHeaders();
       var response = await http.get(Uri.parse(url), headers: headers);
 
-      // A. TOKEN EXPIRED? (401)
       if (response.statusCode == 401) {
-        print("ReaderView: Token Expired (401). Attempting Silent Refresh...");
-
         final refreshed = await AuthService().tryRefreshToken();
-
         if (refreshed) {
-          print("ReaderView: Refresh Success! Retrying request...");
-          // Retry with NEW token
           headers = _getAuthHeaders();
           response = await http.get(Uri.parse(url), headers: headers);
-        } else {
-          print("ReaderView: Refresh Failed. User session died.");
-          // Optional: Navigate to login or show error
         }
       }
 
-      // B. SUCCESS? (200)
       if (response.statusCode == 200) {
-        // Load the HTML string directly.
-        // baseUrl is CRITICAL: it tells the WebView where to find relative images (../images/1.png)
         _controller?.loadHtmlString(response.body, baseUrl: url);
       } else {
-        print("ReaderView Error: Server returned ${response.statusCode}");
-        // Optional: Show error UI
+        if (mounted) setState(() => _isLoading = false);
       }
     } catch (e) {
-      print("ReaderView Network Error: $e");
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -107,7 +91,6 @@ class _ReaderViewState extends State<ReaderView> {
     _spinnerSafetyTimer?.cancel();
     _spinnerSafetyTimer = Timer(const Duration(seconds: 3), () {
       if (mounted && _isLoading) {
-        print("Safety Timer: JS ready signal missing. Hiding spinner.");
         setState(() => _isLoading = false);
       }
     });
@@ -157,7 +140,7 @@ class _ReaderViewState extends State<ReaderView> {
               child: const Center(child: CircularProgressIndicator()),
             ),
 
-          // --- CONTROLS ---
+          // --- TOP BAR ---
           AnimatedPositioned(
             duration: const Duration(milliseconds: 200),
             top: _showControls ? 0 : -100,
@@ -193,6 +176,8 @@ class _ReaderViewState extends State<ReaderView> {
               ),
             ),
           ),
+
+          // --- BOTTOM BAR ---
           AnimatedPositioned(
             duration: const Duration(milliseconds: 200),
             bottom: _showControls ? 0 : -160,
@@ -208,6 +193,7 @@ class _ReaderViewState extends State<ReaderView> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
+                      // Page Text (Updates automatically now)
                       Text(
                         "Page ${(_dragValue ?? _viewModel.getCurrentGlobalPage()).toInt()} of ${_viewModel.totalBookPages}",
                         style: TextStyle(
@@ -282,13 +268,11 @@ class _ReaderViewState extends State<ReaderView> {
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageFinished: (url) {
-            // FIX: Only inject scripts if online
             if (!widget.book.isLocal) {
               _injectOnlineAssets();
             }
           },
           onWebResourceError: (error) {
-            print("WebView Error: ${error.description}");
             if (mounted) setState(() => _isLoading = false);
           },
         ),
@@ -298,23 +282,17 @@ class _ReaderViewState extends State<ReaderView> {
         onMessageReceived: (m) => _handleJsMessage(m.message),
       );
 
-    // NOTE: We do NOT call loadRequest here anymore for online books.
-    // _onViewModelUpdate will handle the first load via _loadContentWithAuthRetry.
     if (widget.book.isLocal) {
       _controller?.loadRequest(Uri.parse(_viewModel.epubUrl ?? ''));
     }
   }
 
-  // --- SAFE BASE64 INJECTION WITH IMAGE FIXER ---
   void _injectOnlineAssets() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bgHex = isDark ? '#121212' : '#FFFFFF';
     final textHex = isDark ? '#E0E0E0' : '#000000';
-
-    // NOTE: This now gets the FRESH token because we refreshed it before loading!
     final token = AuthService().token ?? '';
 
-    // 1. RAW CSS
     const String rawCss = r'''
       * { box-sizing: border-box; }
       html {
@@ -338,7 +316,6 @@ class _ReaderViewState extends State<ReaderView> {
       body.dark-mode { color: #e0e0e0 !important; background-color: #121212 !important; }
     ''';
 
-    // 2. RAW JS (Includes Capitalization Fix)
     const String rawJs = r'''
       (function() {
           function post(msg) { if(window.PrintReader) window.PrintReader.postMessage(msg); }
@@ -360,39 +337,26 @@ class _ReaderViewState extends State<ReaderView> {
           function fixImages() {
               let token = window.AUTH_TOKEN || ''; 
               let imgs = document.getElementsByTagName('img');
-              
               for(let i=0; i<imgs.length; i++) {
                 let src = imgs[i].src;
                 let originalSrc = src;
-
-                // 1. Fix Emulator IP
                 if (src.includes('localhost') || src.includes('127.0.0.1')) {
                   src = src.replace('localhost', '10.0.2.2').replace('127.0.0.1', '10.0.2.2');
                 }
-                
-                // 2. Fix Capitalization
                 if (src.includes('/Images/')) {
                    src = src.replace('/Images/', '/images/');
                 }
-
-                // 3. Append Auth Token
                 if (token && !src.includes('token=')) {
                     let separator = src.includes('?') ? '&' : '?';
                     src = src + separator + 'token=' + token;
                 }
-                
-                // 4. Force Reload
-                if (src !== originalSrc) {
-                   imgs[i].src = src;
-                }
+                if (src !== originalSrc) imgs[i].src = src;
               }
           }
 
           function init() {
               fixImages();
-              // Safety retries
               setTimeout(fixImages, 500);
-              setTimeout(fixImages, 1500);
 
               const w = getWidth();
               const params = new URLSearchParams(window.location.search);
@@ -404,7 +368,6 @@ class _ReaderViewState extends State<ReaderView> {
               setTimeout(function(){ post('ready'); }, 200);
           }
 
-          // TOUCH HANDLERS
           let startX = 0; 
           let isDragging = false;
           let startPage = 0; 
@@ -413,7 +376,14 @@ class _ReaderViewState extends State<ReaderView> {
               startX = e.touches[0].clientX;
               isDragging = true;
               const w = getWidth();
-              startPage = Math.round((window.globalScrollX || 0) / w);
+              
+              const maxPage = Math.ceil((getScrollWidth() - 20) / w) - 1;
+              let rawStart = Math.round((window.globalScrollX || 0) / w);
+              
+              if (rawStart > maxPage) rawStart = maxPage;
+              if (rawStart < 0) rawStart = 0;
+              
+              startPage = rawStart;
           }, {passive: false});
 
           window.addEventListener('touchmove', function(e) {
@@ -435,12 +405,14 @@ class _ReaderViewState extends State<ReaderView> {
               if (diff > 50) targetPage = startPage + 1; 
               else if (diff < -50) targetPage = startPage - 1; 
 
-              const maxPage = Math.ceil(getScrollWidth() / w) - 1;
+              const maxPage = Math.ceil((getScrollWidth() - 20) / w) - 1;
+              
               if (targetPage < 0) { 
                  const params = new URLSearchParams(window.location.search);
                  if (params.get('isFirst') !== 'true') { post('prev_chapter'); return; }
                  targetPage = 0;
               }
+              
               if (targetPage > maxPage) { post('next_chapter'); return; }
 
               const targetX = targetPage * w;
@@ -470,7 +442,6 @@ class _ReaderViewState extends State<ReaderView> {
       })();
     ''';
 
-    // 3. BASE64 ENCODING
     String cssBase64 = base64Encode(utf8.encode(rawCss));
     String jsBase64 = base64Encode(utf8.encode(rawJs));
 
@@ -509,7 +480,14 @@ class _ReaderViewState extends State<ReaderView> {
       _viewModel.previousChapter();
     } else if (message.startsWith('progress:')) {
       final val = double.tryParse(message.split(':')[1]) ?? 0.0;
-      if (_dragValue == null) _viewModel.updateScrollProgress(val);
+
+      // FIX: FORCE UI REBUILD IMMEDIATELY
+      // This ensures the slider moves even if the controls are visible
+      if (_dragValue == null) {
+        setState(() {
+          _viewModel.updateScrollProgress(val);
+        });
+      }
     }
   }
 

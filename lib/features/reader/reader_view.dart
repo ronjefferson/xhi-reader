@@ -1,7 +1,11 @@
+import 'dart:async';
+import 'dart:convert'; // Required for Base64 safety
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'reader_viewmodel.dart';
 import '../../models/book_model.dart';
+import '../../core/services/auth_service.dart';
 
 class ReaderView extends StatefulWidget {
   final BookModel book;
@@ -14,12 +18,10 @@ class ReaderView extends StatefulWidget {
 class _ReaderViewState extends State<ReaderView> {
   late ReaderViewModel _viewModel;
   WebViewController? _controller;
+  Timer? _spinnerSafetyTimer;
 
   bool _showControls = false;
-
-  // Start with loading true. This will cover the initial rendering.
   bool _isLoading = true;
-
   String? _currentUrl;
   double? _dragValue;
 
@@ -33,6 +35,7 @@ class _ReaderViewState extends State<ReaderView> {
 
   @override
   void dispose() {
+    _spinnerSafetyTimer?.cancel();
     _viewModel.removeListener(_onViewModelUpdate);
     super.dispose();
   }
@@ -41,25 +44,43 @@ class _ReaderViewState extends State<ReaderView> {
     if (mounted) {
       if (_dragValue == null) setState(() {});
 
-      // If URL changed (New Chapter OR Force Refresh from Slider)
       if (_viewModel.epubUrl != null && _viewModel.epubUrl != _currentUrl) {
-        setState(() => _isLoading = true); // SHOW SPINNER
+        _startLoading();
         _currentUrl = _viewModel.epubUrl;
-        _controller?.loadRequest(Uri.parse(_currentUrl!));
-      }
 
-      // Note: We don't need to handle scroll request here anymore because
-      // the URL change handles the flow (Load -> Ready -> Scroll)
+        _controller?.loadRequest(
+          Uri.parse(_currentUrl!),
+          headers: _getAuthHeaders(),
+        );
+      }
     }
   }
 
+  void _startLoading() {
+    setState(() => _isLoading = true);
+    _spinnerSafetyTimer?.cancel();
+    _spinnerSafetyTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted && _isLoading) {
+        setState(() => _isLoading = false);
+      }
+    });
+  }
+
+  Map<String, String> _getAuthHeaders() {
+    if (widget.book.isLocal) return {};
+    final token = AuthService().token;
+    return token != null ? {'Authorization': 'Bearer $token'} : {};
+  }
+
   void _executeScroll(double percent) {
-    _controller?.runJavaScript('scrollToPercent($percent)');
+    _controller?.runJavaScript(
+      'if(window.scrollToPercent) window.scrollToPercent($percent);',
+    );
   }
 
   void _applyTheme() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    _controller?.runJavaScript('setTheme($isDark)');
+    _controller?.runJavaScript('if(window.setTheme) window.setTheme($isDark);');
   }
 
   @override
@@ -82,17 +103,14 @@ class _ReaderViewState extends State<ReaderView> {
       backgroundColor: bgColor,
       body: Stack(
         children: [
-          // A. THE READER
           SafeArea(child: WebViewWidget(controller: _controller!)),
-
-          // B. LOADING OVERLAY (Hides the "Nudge")
           if (_isLoading)
             Container(
               color: bgColor,
               child: const Center(child: CircularProgressIndicator()),
             ),
 
-          // C. CONTROLS (Top Bar)
+          // --- CONTROLS ---
           AnimatedPositioned(
             duration: const Duration(milliseconds: 200),
             top: _showControls ? 0 : -100,
@@ -128,8 +146,6 @@ class _ReaderViewState extends State<ReaderView> {
               ),
             ),
           ),
-
-          // D. CONTROLS (Bottom Bar)
           AnimatedPositioned(
             duration: const Duration(milliseconds: 200),
             bottom: _showControls ? 0 : -160,
@@ -155,7 +171,7 @@ class _ReaderViewState extends State<ReaderView> {
                       ),
                       Text(
                         "${(((_dragValue ?? _viewModel.getCurrentGlobalPage().toDouble()) / _viewModel.totalBookPages) * 100).toStringAsFixed(1)}%",
-                        style: TextStyle(
+                        style: const TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 12,
                           color: Colors.grey,
@@ -166,12 +182,9 @@ class _ReaderViewState extends State<ReaderView> {
                   const SizedBox(height: 5),
                   Row(
                     children: [
-                      Text(
+                      const Text(
                         "1",
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey,
-                        ),
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
                       ),
                       Expanded(
                         child: Slider(
@@ -189,23 +202,11 @@ class _ReaderViewState extends State<ReaderView> {
                           activeColor: isDark ? Colors.white : Colors.black87,
                           inactiveColor: Colors.grey[300],
                           onChanged: (val) {
-                            setState(() {
-                              _dragValue = val;
-                            });
-                            final location = _viewModel.getPreviewLocation(
-                              val.toInt(),
-                            );
-                            if (location['chapterIndex'] ==
-                                _viewModel.currentChapterIndex) {
-                              // Optional: live preview scroll if desired, but risky if you want full refresh
-                            }
+                            setState(() => _dragValue = val);
                           },
                           onChangeEnd: (val) {
-                            // Trigger the refresh/jump
                             _viewModel.jumpToGlobalPage(val.toInt());
-                            setState(() {
-                              _dragValue = null;
-                            });
+                            setState(() => _dragValue = null);
                           },
                         ),
                       ),
@@ -228,14 +229,22 @@ class _ReaderViewState extends State<ReaderView> {
   }
 
   void _initWebView(Color bgColor) {
+    _startLoading();
     _currentUrl = _viewModel.epubUrl;
+
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(bgColor)
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageFinished: (url) {
-            // Wait for 'ready' message
+            if (!widget.book.isLocal) {
+              _injectOnlineAssets();
+            }
+          },
+          onWebResourceError: (error) {
+            print("WebView Error: ${error.description}");
+            if (mounted) setState(() => _isLoading = false);
           },
         ),
       )
@@ -243,22 +252,179 @@ class _ReaderViewState extends State<ReaderView> {
         'PrintReader',
         onMessageReceived: (m) => _handleJsMessage(m.message),
       )
-      ..loadRequest(Uri.parse(_currentUrl!));
+      ..loadRequest(Uri.parse(_currentUrl!), headers: _getAuthHeaders());
+  }
+
+  // --- SAFE BASE64 INJECTION ---
+  void _injectOnlineAssets() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bgHex = isDark ? '#121212' : '#FFFFFF';
+    final textHex = isDark ? '#E0E0E0' : '#000000';
+
+    // 1. RAW CSS
+    const String rawCss = r'''
+      * { box-sizing: border-box; }
+      html {
+          height: 100vh !important; width: 100vw !important;
+          overflow: hidden !important; margin: 0 !important; padding: 0 !important;
+          background-color: #ffffff !important;
+          touch-action: pan-y !important; 
+      }
+      body {
+          height: calc(100vh - 80px) !important; width: 100vw !important; 
+          margin: 40px 0 !important; padding: 0 !important; border: none !important;
+          overflow: visible !important; 
+          column-width: 100vw !important; column-gap: 0px !important; column-fill: auto !important;
+          font-family: sans-serif !important; font-size: 18px !important; line-height: 1.6 !important;
+          text-align: justify; 
+          transform: translate3d(0,0,0); backface-visibility: hidden;
+      }
+      p, h1, h2, h3 { margin-left: 20px !important; margin-right: 20px !important; }
+      img { max-width: calc(100vw - 40px) !important; max-height: 100% !important; object-fit: contain !important; display: block !important; margin: 0 auto !important; }
+      html.dark-mode { background-color: #121212 !important; }
+      body.dark-mode { color: #e0e0e0 !important; background-color: #121212 !important; }
+    ''';
+
+    // 2. RAW JS (ONE PAGE MAX LOGIC)
+    const String rawJs = r'''
+      (function() {
+          function post(msg) { if(window.PrintReader) window.PrintReader.postMessage(msg); }
+          function getWidth() { return document.documentElement.clientWidth || window.innerWidth; }
+          function getScrollWidth() { return document.body.scrollWidth; }
+
+          window.setTheme = function(isDark) {
+              if (isDark) { document.documentElement.classList.add('dark-mode'); document.body.classList.add('dark-mode'); }
+              else { document.documentElement.classList.remove('dark-mode'); document.body.classList.remove('dark-mode'); }
+          }
+
+          function setScroll(x) {
+              if (isNaN(x)) x = 0;
+              document.body.style.transform = 'translate3d(' + (-x) + 'px, 0, 0)';
+              window.globalScrollX = x;
+          }
+          window.globalScrollX = 0;
+
+          function init() {
+              let imgs = document.getElementsByTagName('img');
+              for(let i=0; i<imgs.length; i++) {
+                let src = imgs[i].src;
+                if (src.includes('localhost') || src.includes('127.0.0.1')) {
+                  imgs[i].src = src.replace('localhost', '10.0.2.2').replace('127.0.0.1', '10.0.2.2');
+                }
+              }
+              const w = getWidth();
+              const params = new URLSearchParams(window.location.search);
+              if (params.get('pos') === 'end') {
+                  setScroll(getScrollWidth() - w);
+              } else {
+                  setScroll(0);
+              }
+              setTimeout(function(){ post('ready'); }, 200);
+          }
+
+          // TOUCH LOGIC
+          let startX = 0; 
+          let startScroll = 0; 
+          let isDragging = false;
+          let startPage = 0; // Tracks which page we started on
+
+          window.addEventListener('touchstart', function(e) {
+              startX = e.touches[0].clientX;
+              startScroll = window.globalScrollX || 0;
+              
+              // IMPORTANT: Lock the "Start Page"
+              startPage = Math.round(startScroll / getWidth());
+              
+              isDragging = true;
+          }, {passive: false});
+
+          window.addEventListener('touchmove', function(e) {
+              if (!isDragging) return;
+              const diff = startX - e.touches[0].clientX;
+              if (e.cancelable) e.preventDefault();
+              setScroll(startScroll + diff);
+          }, {passive: false});
+
+          window.addEventListener('touchend', function(e) {
+              if (!isDragging) return;
+              isDragging = false;
+              const w = getWidth();
+              const diff = startX - e.changedTouches[0].clientX;
+              
+              if (Math.abs(diff) < 10) { post('toggle_controls'); return; }
+
+              // FIX: Base target on startPage, NOT current scroll position
+              // This guarantees we only move 1 page max from where we started.
+              let targetPage = startPage;
+
+              if (diff > 50) targetPage = startPage + 1; // Next
+              else if (diff < -50) targetPage = startPage - 1; // Prev
+              else targetPage = startPage; // Snap back if swipe too small
+
+              const maxPage = Math.ceil(getScrollWidth() / w) - 1;
+              
+              if (targetPage < 0) { 
+                 const params = new URLSearchParams(window.location.search);
+                 if (params.get('isFirst') !== 'true') { post('prev_chapter'); return; }
+                 targetPage = 0;
+              }
+              if (targetPage > maxPage) { post('next_chapter'); return; }
+
+              const targetX = targetPage * w;
+              smoothScrollTo(targetX);
+          }, {passive: false});
+
+          function smoothScrollTo(targetX) {
+              const start = window.globalScrollX || 0;
+              const dist = targetX - start;
+              let startTime = null;
+              function step(ts) {
+                  if (!startTime) startTime = ts;
+                  const p = Math.min((ts - startTime)/250, 1);
+                  const ease = 1 - Math.pow(1 - p, 3);
+                  setScroll(start + (dist * ease));
+                  if (p < 1) requestAnimationFrame(step);
+                  else {
+                      setScroll(targetX);
+                      const total = getScrollWidth() - getWidth();
+                      post('progress:' + (total > 0 ? targetX/total : 0));
+                  }
+              }
+              requestAnimationFrame(step);
+          }
+
+          if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+          else init();
+      })();
+    ''';
+
+    // 3. BASE64 ENCODING INJECTION
+    String cssBase64 = base64Encode(utf8.encode(rawCss));
+    String jsBase64 = base64Encode(utf8.encode(rawJs));
+
+    _controller?.runJavaScript('''
+      var style = document.createElement('style');
+      style.innerHTML = decodeURIComponent(escape(window.atob('$cssBase64')));
+      document.head.appendChild(style);
+
+      document.body.style.backgroundColor = "$bgHex";
+      document.body.style.color = "$textHex";
+      
+      var script = document.createElement('script');
+      script.innerHTML = decodeURIComponent(escape(window.atob('$jsBase64')));
+      document.head.appendChild(script);
+    ''');
   }
 
   void _handleJsMessage(String message) {
     if (message == 'ready') {
+      _spinnerSafetyTimer?.cancel();
       _applyTheme();
-
-      // 1. PERFORM SCROLL (While hidden)
       if (_viewModel.requestScrollToProgress != null) {
         _executeScroll(_viewModel.requestScrollToProgress!);
         _viewModel.requestScrollToProgress = null;
       }
-
-      // 2. DELAYED REVEAL (The Fix for the "Nudge")
-      // Wait 500ms for the scroll to render properly behind the spinner
-      Future.delayed(const Duration(milliseconds: 500), () {
+      Future.delayed(const Duration(milliseconds: 100), () {
         if (mounted) setState(() => _isLoading = false);
       });
     } else if (message == 'toggle_controls') {
@@ -274,8 +440,6 @@ class _ReaderViewState extends State<ReaderView> {
   }
 
   void _showChapterList() {
-    // ... (Same Chapter List Code as Checkpoint 4) ...
-    // Just ensure it uses the context theme correctly
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bgColor = Theme.of(context).scaffoldBackgroundColor;
     final txtColor =

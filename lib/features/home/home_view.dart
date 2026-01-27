@@ -41,14 +41,14 @@ class _HomeViewState extends State<HomeView>
       _loadOnlineBooks();
     }
 
-    // 3. Listen for Session Expiry
+    // 3. Listen for Session Expiry (Auto-Logout event)
     _sessionSub = AuthService().sessionExpiredStream.listen((expired) {
       if (expired && mounted) {
         _showSessionExpiredDialog();
       }
     });
 
-    // 4. Listen for Tab Changes
+    // 4. Listen for Tab Changes (Auto-refresh cloud tab)
     _tabController.addListener(() {
       if (_tabController.index == 1 &&
           AuthService().isLoggedIn &&
@@ -87,13 +87,13 @@ class _HomeViewState extends State<HomeView>
     }
   }
 
-  // --- DIALOGS & ACTIONS ---
+  // --- ACTIONS & DIALOGS ---
 
   void _showSessionExpiredDialog() {
     setState(() {
       onlineBooks.clear();
     });
-    _tabController.animateTo(0);
+    _tabController.animateTo(0); // Switch to local tab
 
     showDialog(
       context: context,
@@ -121,8 +121,8 @@ class _HomeViewState extends State<HomeView>
   }
 
   void _handleProfileTap() async {
-    // FIX: Removed Scaffold.of(context) check here.
-    // The drawer closing logic is handled by the caller (in _buildDrawer).
+    // If coming from Drawer, close it.
+    if (Scaffold.of(context).isDrawerOpen) Navigator.pop(context);
 
     if (AuthService().isLoggedIn) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -134,10 +134,10 @@ class _HomeViewState extends State<HomeView>
         MaterialPageRoute(builder: (context) => const LoginView()),
       );
 
-      // If login was successful (result == true)
+      // If login was successful
       if (result == true) {
-        setState(() {}); // Refresh UI
-        _loadOnlineBooks();
+        setState(() {}); // Refresh UI (Drawer state)
+        _loadOnlineBooks(); // Fetch books
         _tabController.animateTo(1); // Go to Cloud tab
       }
     }
@@ -150,6 +150,7 @@ class _HomeViewState extends State<HomeView>
     setState(() {
       onlineBooks.clear();
     });
+
     _tabController.animateTo(0); // Go to local tab
 
     ScaffoldMessenger.of(
@@ -157,7 +158,7 @@ class _HomeViewState extends State<HomeView>
     ).showSnackBar(const SnackBar(content: Text("Logged out successfully")));
   }
 
-  // --- BUILD UI ---
+  // --- UI BUILD ---
 
   @override
   Widget build(BuildContext context) {
@@ -205,6 +206,7 @@ class _HomeViewState extends State<HomeView>
   Widget _buildDrawer(bool isLoggedIn) {
     return Drawer(
       child: Builder(
+        // Used to get context for Navigator.pop
         builder: (context) => ListView(
           padding: EdgeInsets.zero,
           children: [
@@ -242,9 +244,7 @@ class _HomeViewState extends State<HomeView>
               leading: Icon(isLoggedIn ? Icons.person : Icons.login),
               title: Text(isLoggedIn ? "Profile" : "Login"),
               onTap: () {
-                Navigator.pop(
-                  context,
-                ); // SAFE: Close drawer here using builder context
+                Navigator.pop(context); // Close Drawer
                 _handleProfileTap();
               },
             ),
@@ -323,16 +323,11 @@ class _HomeViewState extends State<HomeView>
         final book = books[index];
         return GestureDetector(
           onTap: () {
-            if (isLocal) {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => ReaderView(book: book)),
-              );
-            } else {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text("Online Reader coming next!")),
-              );
-            }
+            // Open Reader for both Local and Online books
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => ReaderView(book: book)),
+            );
           },
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -352,7 +347,7 @@ class _HomeViewState extends State<HomeView>
                   ),
                   clipBehavior: Clip.antiAlias,
                   child: isLocal
-                      // Local Cover
+                      // --- LOCAL COVER ---
                       ? (book.coverPath != null &&
                                 File(book.coverPath!).existsSync()
                             ? Image.file(
@@ -364,11 +359,12 @@ class _HomeViewState extends State<HomeView>
                                 size: 40,
                                 color: Colors.grey,
                               ))
-                      // Online Cover
+                      // --- ONLINE COVER (Cached) ---
                       : (book.coverUrl != null
                             ? CachedNetworkImage(
                                 imageUrl: book.coverUrl!,
-                                httpHeaders: ApiService().authHeaders,
+                                httpHeaders: ApiService()
+                                    .authHeaders, // Pass Token for Auth
                                 fit: BoxFit.cover,
                                 placeholder: (context, url) => const Center(
                                   child: SizedBox(

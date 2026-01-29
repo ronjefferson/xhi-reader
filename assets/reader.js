@@ -1,5 +1,9 @@
 (function() {
-    // --- 1. SETUP ---
+    // --- 1. SETUP & UTILS ---
+    function post(msg) { if (window.PrintReader) window.PrintReader.postMessage(msg); }
+    function getWidth() { return document.documentElement.clientWidth || window.innerWidth; }
+    function getScrollWidth() { return document.body.scrollWidth; }
+
     window.setTheme = function(isDark) {
         if (isDark) {
             document.documentElement.classList.add('dark-mode');
@@ -10,157 +14,176 @@
         }
     }
 
-    function getWidth() { return window.innerWidth; }
-    function getScrollWidth() { return document.body.scrollWidth; }
-    function post(msg) { if (window.PrintReader) window.PrintReader.postMessage(msg); }
-
-    let globalScrollX = 0;
-    // New flag to track if we are at the very start of the book
-    let isFirstChapter = false; 
-    
     function setScroll(x) {
-        globalScrollX = x;
-        // Use transform for smooth movement (Checkpoint 5 Architecture)
-        document.body.style.transform = `translate3d(${-x}px, 0, 0)`;
+        // Use transform for high-performance smooth scrolling
+        document.body.style.transform = 'translate3d(' + (-x) + 'px, 0, 0)';
+        window.globalScrollX = x;
+    }
+    window.globalScrollX = 0; // Track position in JS
+
+    // --- 2. IMAGE FIXER (CRITICAL FOR ONLINE & EMULATOR) ---
+    function fixImages() {
+        let token = window.AUTH_TOKEN || ''; 
+        let imgs = document.getElementsByTagName('img');
+        
+        for(let i=0; i<imgs.length; i++) {
+            let src = imgs[i].src;
+            let originalSrc = src;
+
+            // A. Fix Emulator IP (Localhost -> 10.0.2.2)
+            if (src.includes('localhost') || src.includes('127.0.0.1')) {
+                src = src.replace('localhost', '10.0.2.2').replace('127.0.0.1', '10.0.2.2');
+            }
+            
+            // B. Fix Capitalization (The 404 Error Fix)
+            if (src.includes('/Images/')) {
+                src = src.replace('/Images/', '/images/');
+            }
+
+            // C. Append Auth Token (If Online)
+            if (token && !src.includes('token=')) {
+                let separator = src.includes('?') ? '&' : '?';
+                src = src + separator + 'token=' + token;
+            }
+            
+            // D. Apply Changes
+            if (src !== originalSrc) imgs[i].src = src;
+        }
     }
 
-    // --- 2. INIT ---
+    // --- 3. INITIALIZATION ---
     function init() {
-        const pages = Math.ceil(getScrollWidth() / getWidth());
-        post(`page_count:${pages}`);
+        // Run Image Fixer immediately, then retry in case DOM is slow
+        fixImages();
+        setTimeout(fixImages, 500);
+        setTimeout(fixImages, 1500);
 
-        const urlParams = new URLSearchParams(window.location.search);
+        const w = getWidth();
+        const params = new URLSearchParams(window.location.search);
         
-        // 1. Check if this is the first chapter (Passed from Flutter)
-        isFirstChapter = urlParams.get('isFirst') === 'true';
-
-        if (urlParams.get('pos') === 'end') {
-            setScroll(getScrollWidth() - getWidth());
+        // Restore Position
+        if (params.get('pos') === 'end') {
+            setScroll(getScrollWidth() - w);
         } else {
             setScroll(0);
         }
-        
-        setTimeout(() => post('ready'), 100);
+
+        // Notify Flutter we are ready
+        setTimeout(function(){ post('ready'); }, 100);
     }
 
-    // --- 3. SLIDER JUMP ---
+    // --- 4. SLIDER JUMP ---
     window.scrollToPercent = function(percent) {
-        requestAnimationFrame(() => {
-            const width = getWidth();
-            const total = getScrollWidth() - width;
-            if (total <= 0) return;
-
-            const rawTarget = total * percent;
-            const pageIndex = Math.round(rawTarget / width);
-            const targetX = pageIndex * width;
-
-            setScroll(targetX);
-
-            // Force Repaint (Digital Nudge)
-            const forceReflow = document.body.offsetHeight; 
-
-            // Update Flutter
-            const newPercent = targetX / total;
-            post(`progress:${newPercent}`);
-        });
+        const w = getWidth();
+        const total = getScrollWidth() - w;
+        const targetX = Math.round((total * percent) / w) * w; // Snap to nearest page
+        setScroll(targetX);
     };
 
-    // --- 4. PHYSICS ENGINE ---
-    let startX = 0;
-    let startScroll = 0;
+    // --- 5. TOUCH & GESTURE ENGINE ---
+    let startX = 0; 
+    let startY = 0;
     let isDragging = false;
+    let startPage = 0; 
 
-    window.addEventListener('touchstart', (e) => {
+    window.addEventListener('touchstart', function(e) {
         startX = e.touches[0].clientX;
-        startScroll = globalScrollX;
+        startY = e.touches[0].clientY;
         isDragging = true;
-    }, { passive: false });
+        
+        const w = getWidth();
+        // GHOST PAGE FIX: Subtract 20px buffer
+        const maxPage = Math.ceil((getScrollWidth() - 20) / w) - 1;
+        
+        // Calculate current page
+        let rawStart = Math.round((window.globalScrollX || 0) / w);
+        
+        // Clamp (Prevent looping/crashing on resize)
+        if (rawStart > maxPage) rawStart = maxPage;
+        if (rawStart < 0) rawStart = 0;
+        
+        startPage = rawStart;
+    }, {passive: false});
 
-    window.addEventListener('touchmove', (e) => {
+    window.addEventListener('touchmove', function(e) {
         if (!isDragging) return;
-        const currentX = e.touches[0].clientX;
-        const delta = startX - currentX;
-        setScroll(startScroll + delta);
-    }, { passive: false });
+        const diff = startX - e.touches[0].clientX;
+        
+        // Lock vertical scroll, allow horizontal
+        if (Math.abs(diff) > 5 && e.cancelable) {
+            e.preventDefault();
+        }
+        
+        // follow finger (1:1 movement)
+        setScroll((startPage * getWidth()) + diff);
+    }, {passive: false});
 
-    window.addEventListener('touchend', (e) => {
+    window.addEventListener('touchend', function(e) {
         if (!isDragging) return;
         isDragging = false;
-
-        const width = getWidth();
-        const maxScroll = getScrollWidth() - width;
-        const diff = startX - e.changedTouches[0].clientX;
-
-        // Tap
-        if (Math.abs(diff) < 10) {
-            post('toggle_controls');
-            return;
-        }
-
-        // Snap Logic
-        let targetPage = Math.round(globalScrollX / width);
         
-        if (diff > 50) { // NEXT (Swipe Left)
-            if (globalScrollX < maxScroll - 10) {
-                targetPage = Math.ceil(startScroll / width) + 1;
-            } else { 
-                post('next_chapter'); 
-                return; 
-            }
-        } 
-        else if (diff < -50) { // PREV (Swipe Right)
-            if (globalScrollX > 10) {
-                // Normal internal page turn
-                targetPage = Math.floor(startScroll / width) - 1;
-            } else { 
-                // We are at the start of the chapter
-                
-                // CRITICAL FIX: If first chapter, don't allow prev_chapter
-                if (isFirstChapter) {
-                    // Snap back to 0 (Rubber band effect)
-                    targetPage = 0;
-                } else {
-                    post('prev_chapter'); 
-                    return; 
-                }
-            }
+        const w = getWidth();
+        const diffX = startX - e.changedTouches[0].clientX;
+        const diffY = startY - e.changedTouches[0].clientY;
+        
+        // --- TAP DETECTION ---
+        // If moved less than 10px, it's a tap, not a swipe.
+        if (Math.abs(diffX) < 10 && Math.abs(diffY) < 10) { 
+            post('toggle_controls'); 
+            // Snap back to perfect alignment just in case
+            smoothScrollTo(startPage * w);
+            return; 
         }
 
-        const targetX = targetPage * width;
+        // --- SWIPE LOGIC ---
+        let targetPage = startPage;
+        if (diffX > 50) targetPage = startPage + 1; // Next
+        else if (diffX < -50) targetPage = startPage - 1; // Prev
+
+        // Boundary Checks
+        const maxPage = Math.ceil((getScrollWidth() - 20) / w) - 1;
+        
+        // Check for Chapter Change
+        if (targetPage < 0) { 
+            const params = new URLSearchParams(window.location.search);
+            // Only go to prev chapter if NOT the first one
+            if (params.get('isFirst') !== 'true') { post('prev_chapter'); return; }
+            targetPage = 0; // Else bounce back
+        }
+        
+        if (targetPage > maxPage) { post('next_chapter'); return; }
+
+        // Animate to target
+        const targetX = targetPage * w;
         smoothScrollTo(targetX);
-    }, { passive: false });
+    }, {passive: false});
 
+    // --- 6. ANIMATION LOOP ---
     function smoothScrollTo(targetX) {
-        const start = globalScrollX;
+        const start = window.globalScrollX || 0;
         const dist = targetX - start;
-        const duration = 200;
         let startTime = null;
-
-        function step(timestamp) {
-            if (!startTime) startTime = timestamp;
-            const progress = timestamp - startTime;
-            const percent = Math.min(progress / duration, 1);
-            const ease = 1 - Math.pow(1 - percent, 3);
+        
+        function step(ts) {
+            if (!startTime) startTime = ts;
+            const p = Math.min((ts - startTime)/250, 1); // 250ms duration
+            const ease = 1 - Math.pow(1 - p, 3); // Cubic ease-out
             
             setScroll(start + (dist * ease));
-
-            if (progress < duration) {
-                requestAnimationFrame(step);
-            } else {
-                setScroll(targetX);
+            
+            if (p < 1) requestAnimationFrame(step);
+            else {
+                setScroll(targetX); // Ensure exact finish
                 
+                // Update Flutter Slider
                 const total = getScrollWidth() - getWidth();
-                // Avoid divide by zero
-                const p = total > 0 ? targetX / total : 0;
-                post(`progress:${p}`);
+                const progress = total > 0 ? targetX/total : 0;
+                post('progress:' + progress);
             }
         }
         requestAnimationFrame(step);
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
-    } else {
-        init();
-    }
+    // Start
+    init();
 })();

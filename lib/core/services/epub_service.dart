@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert'; // REQUIRED for utf8.decode
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:archive/archive.dart';
 import 'package:xml/xml.dart';
@@ -14,14 +15,13 @@ class EpubService {
   HttpServer? _server;
   static const int _port = 4545;
 
-  // Cache for the reader assets so we don't read them every request
   String? _cachedJs;
   String? _cachedCss;
 
   Future<void> startServer(String appDocPath) async {
     if (_server != null) return;
 
-    // 1. Pre-load assets into memory
+    // 1. Pre-load assets
     _cachedJs = await rootBundle.loadString('assets/reader.js');
     _cachedCss = await rootBundle.loadString('assets/reader.css');
 
@@ -36,17 +36,21 @@ class EpubService {
             final response = await innerHandler(request);
             final path = request.url.path.toLowerCase();
 
-            // 2. INJECT ASSETS INLINE & WRAP CONTENT
+            // 2. INTERCEPT HTML FILES
             if (response.statusCode == 200 &&
                 (path.endsWith('.html') || path.endsWith('.xhtml'))) {
               final bodyBytes = await response.read().toList();
-              final originalBody = String.fromCharCodes(
-                bodyBytes.expand((x) => x),
-              );
+              final allBytes = bodyBytes.expand((x) => x).toList();
 
-              // Prepare Tags
+              // --- THE FIX ---
+              // We force UTF-8 decoding here.
+              // This fixes the "â€œ" garbage characters before they leave the server.
+              final originalBody = utf8.decode(allBytes, allowMalformed: true);
+              // ----------------
+
               final String cssTag = '<style>$_cachedCss</style>';
               final String jsTag = '<script>$_cachedJs</script>';
+              // Viewport meta is critical for mobile scaling
               final String metaTag =
                   '<meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">';
 
@@ -59,29 +63,21 @@ class EpubService {
                   '<head>$metaTag$cssTag',
                 );
               } else {
-                // If no head exists, creating one is safer
                 modified = '<head>$metaTag$cssTag</head>$modified';
               }
 
-              // B. Wrap Body Content in <div id="viewer">
-              // This is CRITICAL for the native scroll fix.
-              // We find the opening <body> tag (handling attributes) and inject the div start.
-              // We find the closing </body> tag and inject the div end + JS.
-
+              // B. Wrap Body with div id="viewer" (For your scrolling logic)
               if (modified.contains('<body')) {
-                // 1. Insert start <div id="viewer"> after <body>
                 modified = modified.replaceFirstMapped(
                   RegExp(r'<body[^>]*>', caseSensitive: false),
                   (match) => '${match.group(0)}<div id="viewer">',
                 );
 
-                // 2. Insert end </div> and JS before </body>
                 modified = modified.replaceFirst(
                   '</body>',
                   '</div>$jsTag</body>',
                 );
               } else {
-                // Fallback for malformed HTML
                 modified =
                     '<body><div id="viewer">$modified</div>$jsTag</body>';
               }
@@ -90,6 +86,7 @@ class EpubService {
                 modified,
                 headers: {
                   ...response.headers,
+                  // C. Tell WebView this is definitely UTF-8
                   'content-type': 'text/html; charset=utf-8',
                 },
               );
@@ -101,13 +98,13 @@ class EpubService {
 
     try {
       _server = await shelf_io.serve(pipeline, InternetAddress.anyIPv4, _port);
-      print('EpubServer running on port $_port');
+      print('EpubServer running on http://127.0.0.1:$_port');
     } catch (e) {
       print("Error starting server: $e");
     }
   }
 
-  // --- STANDARD EPUB PARSING LOGIC BELOW ---
+  // --- STANDARD EPUB PARSING (Unchanged) ---
 
   Future<List<String>> getSpineUrls(
     File epubFile,
@@ -130,7 +127,6 @@ class EpubService {
 
       return spinePaths.map((path) {
         final cleanPath = rootFolder.isNotEmpty ? '$rootFolder/$path' : path;
-        // Note: No ?v= needed here, ViewModel adds it if needed.
         return 'http://127.0.0.1:$_port/books/$bookId/raw/$cleanPath';
       }).toList();
     } catch (e) {
@@ -143,7 +139,8 @@ class EpubService {
     try {
       final file = File(localPath);
       if (!await file.exists()) return 1;
-      String content = await file.readAsString();
+      // Also ensure page counting reads UTF-8
+      String content = await file.readAsString(encoding: utf8);
 
       bool hasImages =
           content.contains('<img') ||
@@ -161,7 +158,6 @@ class EpubService {
     }
   }
 
-  // --- HELPERS ---
   Future<void> _unzipBook(File epubFile, Directory outputDir) async {
     final bytes = await epubFile.readAsBytes();
     final archive = ZipDecoder().decodeBytes(bytes);

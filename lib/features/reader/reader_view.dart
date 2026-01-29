@@ -1,6 +1,5 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
+import 'dart:convert'; // Still needed for base64 injection in online mode
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:http/http.dart' as http;
@@ -25,8 +24,6 @@ class _ReaderViewState extends State<ReaderView> {
   bool _showControls = false;
   bool _isLoading = true;
   String? _currentUrl;
-
-  // This value is non-null ONLY while the user is dragging the slider
   double? _dragValue;
 
   @override
@@ -46,43 +43,48 @@ class _ReaderViewState extends State<ReaderView> {
 
   void _onViewModelUpdate() {
     if (mounted) {
-      // Only rebuild if NOT dragging (dragging handles its own UI updates)
       if (_dragValue == null) setState(() {});
 
       if (_viewModel.epubUrl != null && _viewModel.epubUrl != _currentUrl) {
         _currentUrl = _viewModel.epubUrl;
-        _loadContentWithAuthRetry(_currentUrl!);
+        _loadContent(_currentUrl!);
       }
     }
   }
 
-  Future<void> _loadContentWithAuthRetry(String url) async {
+  // --- SIMPLE LOADER ---
+  Future<void> _loadContent(String url) async {
     _startLoading();
 
+    // 1. LOCAL BOOK (Served by EpubService)
     if (widget.book.isLocal) {
+      // The server at 127.0.0.1 now handles UTF-8 and Assets perfectly.
+      // We just load the URL.
       _controller?.loadRequest(Uri.parse(url));
       return;
     }
 
+    // 2. ONLINE BOOK (Requires Auth Headers)
     try {
-      var headers = _getAuthHeaders();
-      var response = await http.get(Uri.parse(url), headers: headers);
+      final uri = Uri.parse(url);
+      final headers = _getAuthHeaders();
+
+      // Check if token is valid before loading
+      final response = await http.head(uri, headers: headers);
 
       if (response.statusCode == 401) {
+        print("ReaderView: Token expired, refreshing...");
         final refreshed = await AuthService().tryRefreshToken();
         if (refreshed) {
-          headers = _getAuthHeaders();
-          response = await http.get(Uri.parse(url), headers: headers);
+          _controller?.loadRequest(uri, headers: _getAuthHeaders());
         }
-      }
-
-      if (response.statusCode == 200) {
-        _controller?.loadHtmlString(response.body, baseUrl: url);
       } else {
-        if (mounted) setState(() => _isLoading = false);
+        _controller?.loadRequest(uri, headers: headers);
       }
     } catch (e) {
-      if (mounted) setState(() => _isLoading = false);
+      print("Online load error: $e");
+      // Try loading anyway, maybe it's public
+      _controller?.loadRequest(Uri.parse(url));
     }
   }
 
@@ -134,13 +136,18 @@ class _ReaderViewState extends State<ReaderView> {
       body: Stack(
         children: [
           SafeArea(child: WebViewWidget(controller: _controller!)),
+
           if (_isLoading)
-            Container(
-              color: bgColor,
-              child: const Center(child: CircularProgressIndicator()),
+            GestureDetector(
+              onTap: () => setState(() => _showControls = !_showControls),
+              behavior: HitTestBehavior.opaque,
+              child: Container(
+                color: bgColor,
+                child: const Center(child: CircularProgressIndicator()),
+              ),
             ),
 
-          // --- TOP BAR ---
+          // Top Bar
           AnimatedPositioned(
             duration: const Duration(milliseconds: 200),
             top: _showControls ? 0 : -100,
@@ -177,7 +184,7 @@ class _ReaderViewState extends State<ReaderView> {
             ),
           ),
 
-          // --- BOTTOM BAR ---
+          // Bottom Bar
           AnimatedPositioned(
             duration: const Duration(milliseconds: 200),
             bottom: _showControls ? 0 : -160,
@@ -193,7 +200,6 @@ class _ReaderViewState extends State<ReaderView> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      // Page Text (Updates automatically now)
                       Text(
                         "Page ${(_dragValue ?? _viewModel.getCurrentGlobalPage()).toInt()} of ${_viewModel.totalBookPages}",
                         style: TextStyle(
@@ -234,13 +240,17 @@ class _ReaderViewState extends State<ReaderView> {
                           max: _viewModel.totalBookPages.toDouble(),
                           activeColor: isDark ? Colors.white : Colors.black87,
                           inactiveColor: Colors.grey[300],
-                          onChanged: (val) {
-                            setState(() => _dragValue = val);
-                          },
-                          onChangeEnd: (val) {
-                            _viewModel.jumpToGlobalPage(val.toInt());
-                            setState(() => _dragValue = null);
-                          },
+                          onChanged: _isLoading
+                              ? null
+                              : (val) {
+                                  setState(() => _dragValue = val);
+                                },
+                          onChangeEnd: _isLoading
+                              ? null
+                              : (val) {
+                                  _viewModel.jumpToGlobalPage(val.toInt());
+                                  setState(() => _dragValue = null);
+                                },
                         ),
                       ),
                       Text(
@@ -268,6 +278,8 @@ class _ReaderViewState extends State<ReaderView> {
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageFinished: (url) {
+            // Online books need manual JS injection (because no server does it for them)
+            // Local books have JS injected by EpubService.
             if (!widget.book.isLocal) {
               _injectOnlineAssets();
             }
@@ -282,24 +294,27 @@ class _ReaderViewState extends State<ReaderView> {
         onMessageReceived: (m) => _handleJsMessage(m.message),
       );
 
-    if (widget.book.isLocal) {
-      _controller?.loadRequest(Uri.parse(_viewModel.epubUrl ?? ''));
+    if (_viewModel.epubUrl != null) {
+      _loadContent(_viewModel.epubUrl!);
     }
   }
 
+  // --- ONLINE ONLY ASSETS (Restored) ---
   void _injectOnlineAssets() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bgHex = isDark ? '#121212' : '#FFFFFF';
     final textHex = isDark ? '#E0E0E0' : '#000000';
     final token = AuthService().token ?? '';
 
+    // Standard Online CSS
     const String rawCss = r'''
-      * { box-sizing: border-box; }
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
       html {
           height: 100vh !important; width: 100vw !important;
           overflow: hidden !important; margin: 0 !important; padding: 0 !important;
           background-color: #ffffff !important;
           touch-action: pan-y !important; 
+          -webkit-user-select: none; user-select: none;
       }
       body {
           height: calc(100vh - 80px) !important; width: 100vw !important; 
@@ -316,6 +331,7 @@ class _ReaderViewState extends State<ReaderView> {
       body.dark-mode { color: #e0e0e0 !important; background-color: #121212 !important; }
     ''';
 
+    // Standard Online JS
     const String rawJs = r'''
       (function() {
           function post(msg) { if(window.PrintReader) window.PrintReader.postMessage(msg); }
@@ -328,7 +344,6 @@ class _ReaderViewState extends State<ReaderView> {
           }
 
           function setScroll(x) {
-              if (isNaN(x)) x = 0;
               document.body.style.transform = 'translate3d(' + (-x) + 'px, 0, 0)';
               window.globalScrollX = x;
           }
@@ -376,13 +391,10 @@ class _ReaderViewState extends State<ReaderView> {
               startX = e.touches[0].clientX;
               isDragging = true;
               const w = getWidth();
-              
               const maxPage = Math.ceil((getScrollWidth() - 20) / w) - 1;
               let rawStart = Math.round((window.globalScrollX || 0) / w);
-              
               if (rawStart > maxPage) rawStart = maxPage;
               if (rawStart < 0) rawStart = 0;
-              
               startPage = rawStart;
           }, {passive: false});
 
@@ -447,14 +459,11 @@ class _ReaderViewState extends State<ReaderView> {
 
     _controller?.runJavaScript('''
       window.AUTH_TOKEN = "$token";
-      
       var style = document.createElement('style');
       style.innerHTML = decodeURIComponent(escape(window.atob('$cssBase64')));
       document.head.appendChild(style);
-
       document.body.style.backgroundColor = "$bgHex";
       document.body.style.color = "$textHex";
-      
       var script = document.createElement('script');
       script.innerHTML = decodeURIComponent(escape(window.atob('$jsBase64')));
       document.head.appendChild(script);
@@ -480,9 +489,6 @@ class _ReaderViewState extends State<ReaderView> {
       _viewModel.previousChapter();
     } else if (message.startsWith('progress:')) {
       final val = double.tryParse(message.split(':')[1]) ?? 0.0;
-
-      // FIX: FORCE UI REBUILD IMMEDIATELY
-      // This ensures the slider moves even if the controls are visible
       if (_dragValue == null) {
         setState(() {
           _viewModel.updateScrollProgress(val);
@@ -500,52 +506,19 @@ class _ReaderViewState extends State<ReaderView> {
     showModalBottomSheet(
       context: context,
       backgroundColor: bgColor,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
       builder: (context) {
-        return Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Text(
-                "Table of Contents",
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: txtColor,
-                ),
-              ),
-            ),
-            Expanded(
-              child: ListView.separated(
-                itemCount: _viewModel.chapterTitles.length,
-                separatorBuilder: (c, i) =>
-                    Divider(height: 1, color: Colors.grey.withOpacity(0.3)),
-                itemBuilder: (context, index) {
-                  bool isCurrent = index == _viewModel.currentChapterIndex;
-                  return ListTile(
-                    title: Text(
-                      _viewModel.chapterTitles[index],
-                      style: TextStyle(
-                        fontWeight: isCurrent
-                            ? FontWeight.bold
-                            : FontWeight.normal,
-                        color: isCurrent ? Colors.blue : txtColor,
-                      ),
-                    ),
-                    trailing: isCurrent
-                        ? const Icon(Icons.check, color: Colors.blue, size: 20)
-                        : null,
-                    onTap: () {
-                      Navigator.pop(context);
-                      _viewModel.jumpToChapter(index);
-                    },
-                  );
-                },
-              ),
-            ),
-          ],
+        return ListView.separated(
+          itemCount: _viewModel.chapterTitles.length,
+          separatorBuilder: (c, i) => Divider(),
+          itemBuilder: (context, index) {
+            return ListTile(
+              title: Text(_viewModel.chapterTitles[index]),
+              onTap: () {
+                Navigator.pop(context);
+                _viewModel.jumpToChapter(index);
+              },
+            );
+          },
         );
       },
     );

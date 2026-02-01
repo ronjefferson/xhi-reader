@@ -2,118 +2,138 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'api_service.dart';
 
 class AuthService {
   static final AuthService _instance = AuthService._internal();
   factory AuthService() => _instance;
   AuthService._internal();
 
-  // REMINDER: Use http://10.0.2.2:8000 for Android Emulator
-  // Use your computer's IP (e.g., http://192.168.1.5:8000) for physical devices
-  static const String _baseUrl = "http://10.0.2.2:8000";
-
-  String? _accessToken;
-  String? _refreshToken;
-  String? _username; // <--- NEW: Variable to hold the username
-
-  // Stream to notify UI when session expires (Refresh failed)
-  final _sessionExpiredController = StreamController<bool>.broadcast();
+  final StreamController<bool> _sessionExpiredController =
+      StreamController<bool>.broadcast();
   Stream<bool> get sessionExpiredStream => _sessionExpiredController.stream;
 
-  String? get token => _accessToken;
-  String? get username => _username; // <--- NEW: Getter
-  bool get isLoggedIn => _accessToken != null;
+  String? _token;
+  String? _refreshToken;
+  String? _username;
 
-  /// Load tokens AND username from storage on app start
-  Future<void> loadToken() async {
+  String? get token => _token;
+  String? get username => _username;
+  bool get isLoggedIn => _token != null;
+
+  Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
-    _accessToken = prefs.getString('auth_token');
+    _token = prefs.getString('access_token');
     _refreshToken = prefs.getString('refresh_token');
-    _username = prefs.getString('auth_username'); // <--- NEW: Load from disk
+    _username = prefs.getString('username');
   }
 
-  /// 1. Login Request
-  Future<bool> login(String email, String password) async {
+  /// --- REGISTER (New) ---
+  Future<String?> register(String email, String password) async {
+    final url = Uri.parse('${ApiService.baseUrl}/register');
+
     try {
-      final url = Uri.parse('$_baseUrl/token');
       final response = await http.post(
         url,
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: {'username': email, 'password': password},
+        headers: {
+          'Content-Type': 'application/json', // 🟢 REQUIRED by backend
+          'ngrok-skip-browser-warning': 'true',
+        },
+        body: jsonEncode({'email': email, 'password': password}),
+      );
+
+      if (response.statusCode == 200) {
+        return null; // Success (No error message)
+      } else {
+        // Return the error message from the backend (e.g., "Email already registered")
+        final data = jsonDecode(response.body);
+        return data['detail'] ?? "Registration failed";
+      }
+    } catch (e) {
+      return "Connection error: $e";
+    }
+  }
+
+  /// --- LOGIN ---
+  Future<bool> login(String username, String password) async {
+    final url = Uri.parse('${ApiService.baseUrl}/token');
+
+    try {
+      final response = await http.post(
+        url,
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'ngrok-skip-browser-warning': 'true',
+        },
+        body: {'username': username, 'password': password},
       );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        _token = data['access_token'];
+        _refreshToken = data['refresh_token'];
+        _username = username;
 
-        // Save Tokens
-        await _saveTokens(data['access_token'], data['refresh_token']);
-
-        // NEW: Save Username (Email) locally so we can show it in the drawer
-        _username = email;
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('auth_username', email);
+        await prefs.setString('access_token', _token!);
+        await prefs.setString('refresh_token', _refreshToken!);
+        await prefs.setString('username', _username!);
 
         return true;
+      } else {
+        print("Login Failed: ${response.statusCode} ${response.body}");
+        return false;
       }
-      return false;
     } catch (e) {
-      print("Login Error: $e");
+      print("Login Connection Error: $e");
       return false;
     }
   }
 
-  /// 2. Refresh Token Logic
+  /// --- LOGOUT ---
+  Future<void> logout() async {
+    _token = null;
+    _refreshToken = null;
+    _username = null;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('access_token');
+    await prefs.remove('refresh_token');
+    await prefs.remove('username');
+  }
+
+  /// --- REFRESH TOKEN ---
   Future<bool> tryRefreshToken() async {
-    if (_refreshToken == null) return false;
+    if (_refreshToken == null) {
+      _sessionExpiredController.add(true);
+      return false;
+    }
 
+    final url = Uri.parse('${ApiService.baseUrl}/token/refresh');
     try {
-      final url = Uri.parse('$_baseUrl/refresh');
-      print("DEBUG: Attempting to refresh token...");
-
       final response = await http.post(
         url,
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
         body: jsonEncode({'refresh_token': _refreshToken}),
       );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        // Save the new access token AND the new refresh token (if rotated)
-        await _saveTokens(data['access_token'], data['refresh_token']);
-        print("DEBUG: Refresh successful!");
+        _token = data['access_token'];
+
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('access_token', _token!);
         return true;
       } else {
-        print("DEBUG: Refresh failed. Session expired.");
-        _sessionExpiredController.add(true); // Notify UI
-        await logout(); // Clear data immediately
+        await logout();
+        _sessionExpiredController.add(true);
         return false;
       }
     } catch (e) {
-      print("Refresh Network Error: $e");
       return false;
     }
-  }
-
-  Future<void> _saveTokens(String access, String? refresh) async {
-    _accessToken = access;
-    if (refresh != null) _refreshToken = refresh;
-
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('auth_token', _accessToken!);
-    if (_refreshToken != null) {
-      await prefs.setString('refresh_token', _refreshToken!);
-    }
-  }
-
-  /// Logout
-  Future<void> logout() async {
-    _accessToken = null;
-    _refreshToken = null;
-    _username = null; // <--- NEW: Clear memory
-
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('auth_token');
-    await prefs.remove('refresh_token');
-    await prefs.remove('auth_username'); // <--- NEW: Clear disk
   }
 }

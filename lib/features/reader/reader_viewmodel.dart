@@ -4,30 +4,29 @@ import 'package:path_provider/path_provider.dart';
 import '../../models/book_model.dart';
 import '../../core/services/epub_service.dart';
 import '../../core/services/library_service.dart';
-import '../../core/services/api_service.dart';
+import '../../core/services/api_service.dart'; // REQUIRED for BaseUrl
 import '../../core/services/auth_service.dart';
 
 class ReaderViewModel extends ChangeNotifier {
   final BookModel book;
 
-  // --- State Variables (Watched by View) ---
+  // --- State ---
   String? epubUrl;
   bool isReady = false;
   String? errorMessage;
 
-  // --- Navigation Data ---
+  // --- Navigation ---
   List<String> spine = [];
   List<String> chapterTitles = [];
   int currentChapterIndex = 0;
 
-  // --- Pagination Math ---
+  // --- Pagination ---
   List<int> _chapterPageCounts = [];
   List<int> _cumulativePageCounts = [];
   int _totalBookPages = 1;
   double _currentChapterProgress = 0.0;
 
   // --- Events ---
-  // The View reads this, scrolls the WebView, then sets it to null
   double? requestScrollToProgress;
 
   ReaderViewModel({required this.book});
@@ -62,12 +61,11 @@ class ReaderViewModel extends ChangeNotifier {
     );
     await _calculateLocalPageCounts(book.id, appDocPath);
 
-    // Restore Progress
     final savedData = await LibraryService().getLastProgress(book.id);
     _restoreState(savedData);
   }
 
-  // --- MODE 2: ONLINE (New Logic) ---
+  // --- MODE 2: ONLINE ---
   Future<void> _initOnlineMode() async {
     // 1. Fetch Manifest
     final manifest = await ApiService().fetchManifest(book.id);
@@ -81,22 +79,33 @@ class ReaderViewModel extends ChangeNotifier {
 
     final List<dynamic> chapters = manifest['chapters'];
 
+    // 🟢 SINGLE SOURCE OF TRUTH: Get the current active Base URL
+    final String currentBaseUrl = ApiService.baseUrl;
+
     for (var chap in chapters) {
       String rawUrl = chap['url'];
 
-      // FIX: Rewrite 'localhost' to '10.0.2.2' for Android Emulator
-      if (Platform.isAndroid) {
-        if (rawUrl.contains('127.0.0.1')) {
-          rawUrl = rawUrl.replaceAll('127.0.0.1', '10.0.2.2');
-        } else if (rawUrl.contains('localhost')) {
-          rawUrl = rawUrl.replaceAll('localhost', '10.0.2.2');
-        }
+      // 🟢 DYNAMIC SWAP:
+      // If the URL from DB is localhost/127.0.0.1, replace it with currentBaseUrl
+      // (This handles switching between Emulator Loopback and Ngrok automatically)
+      if (rawUrl.contains('localhost') || rawUrl.contains('127.0.0.1')) {
+        rawUrl = rawUrl.replaceFirst(
+          RegExp(r'http://(localhost|127\.0\.0\.1)(:\d+)?'),
+          currentBaseUrl,
+        );
       }
 
       spine.add(rawUrl);
-      chapterTitles.add(chap['title'] ?? "Chapter");
 
-      // Estimate Pages (approx 2KB per page)
+      // 🟢 TITLE LOGIC: Rename "Chapter X" to "Illustration" if needed
+      String t = chap['title'] ?? "";
+      final genericNameRegex = RegExp(r'^Chapter\s*\d*$', caseSensitive: false);
+      if (t.trim().isEmpty || genericNameRegex.hasMatch(t.trim())) {
+        t = "Illustration";
+      }
+      chapterTitles.add(t);
+
+      // Estimate Pages
       int size = chap['sizeBytes'] ?? 2000;
       int pages = (size / 2000).ceil();
       if (pages < 1) pages = 1;
@@ -107,10 +116,8 @@ class ReaderViewModel extends ChangeNotifier {
     }
     _totalBookPages = runningTotal > 0 ? runningTotal : 1;
 
-    // 2. Fetch Progress from Cloud
+    // 2. Fetch Progress
     final cloudData = await ApiService().getProgress(book.id);
-
-    // Map cloud data to our internal format
     Map<String, dynamic>? progressData;
     if (cloudData != null) {
       progressData = {
@@ -121,13 +128,12 @@ class ReaderViewModel extends ChangeNotifier {
     _restoreState(progressData);
   }
 
-  // --- URL BUILDER (Critical for Online Images) ---
+  // --- URL BUILDER ---
   void _updateUrl(String baseUrl, {bool posEnd = false}) {
     final String v = DateTime.now().millisecondsSinceEpoch.toString();
     String separator = baseUrl.contains('?') ? '&' : '?';
     String finalUrl = "$baseUrl${separator}v=$v";
 
-    // FIX: Inject Token so images inside the chapter load without 401
     if (!book.isLocal) {
       final token = AuthService().token;
       if (token != null) finalUrl += "&token=$token";
@@ -138,7 +144,6 @@ class ReaderViewModel extends ChangeNotifier {
     if (currentChapterIndex == spine.length - 1) finalUrl += "&isLast=true";
 
     epubUrl = finalUrl;
-    // View detects this change and reloads the WebView
   }
 
   // --- STATE RESTORATION ---
@@ -149,13 +154,9 @@ class ReaderViewModel extends ChangeNotifier {
           ? (data['progress'] as int).toDouble()
           : (data['progress'] as double? ?? 0.0);
 
-      // Validate index
       if (currentChapterIndex >= spine.length) currentChapterIndex = 0;
-
-      // Store the scroll request so the View executes it after loading
       requestScrollToProgress = pct.clamp(0.0, 1.0);
     }
-
     if (spine.isNotEmpty) {
       _updateUrl(spine[currentChapterIndex]);
       isReady = true;
@@ -179,13 +180,12 @@ class ReaderViewModel extends ChangeNotifier {
     }
   }
 
-  // --- NAVIGATION METHODS (Called by View) ---
-
+  // --- NAVIGATION ---
   void nextChapter() {
     if (hasNext) {
       currentChapterIndex++;
       _updateUrl(spine[currentChapterIndex]);
-      requestScrollToProgress = 0.0; // Start at top
+      requestScrollToProgress = 0.0;
       _currentChapterProgress = 0.0;
       notifyListeners();
       _saveCurrentProgress();
@@ -196,7 +196,7 @@ class ReaderViewModel extends ChangeNotifier {
     if (hasPrevious) {
       currentChapterIndex--;
       _updateUrl(spine[currentChapterIndex], posEnd: true);
-      requestScrollToProgress = 1.0; // Start at bottom
+      requestScrollToProgress = 1.0;
       _currentChapterProgress = 1.0;
       notifyListeners();
       _saveCurrentProgress();
@@ -213,10 +213,8 @@ class ReaderViewModel extends ChangeNotifier {
     }
   }
 
-  // Called when user releases the slider
   void jumpToGlobalPage(int globalPage) {
     globalPage = globalPage.clamp(1, _totalBookPages);
-
     for (int i = 0; i < _cumulativePageCounts.length; i++) {
       int start = _cumulativePageCounts[i];
       int count = _chapterPageCounts[i];
@@ -228,10 +226,9 @@ class ReaderViewModel extends ChangeNotifier {
 
         if (currentChapterIndex != i) {
           currentChapterIndex = i;
-          _updateUrl(spine[i]); // Change Chapter
+          _updateUrl(spine[i]);
         }
-
-        requestScrollToProgress = percent; // Scroll to position
+        requestScrollToProgress = percent;
         notifyListeners();
         _saveCurrentProgress();
         return;
@@ -241,35 +238,19 @@ class ReaderViewModel extends ChangeNotifier {
 
   void updateScrollProgress(double progress) {
     _currentChapterProgress = progress;
-    // We don't notifyListeners here to avoid rebuilding the whole UI on every pixel scroll
     _saveCurrentProgress();
   }
 
-  // Helper for the slider label
   int getCurrentGlobalPage() {
     if (_chapterPageCounts.isEmpty) return 1;
     if (currentChapterIndex >= _cumulativePageCounts.length) return 1;
-
     int start = _cumulativePageCounts[currentChapterIndex];
     int count = _chapterPageCounts[currentChapterIndex];
-
     int pagesIn = (_currentChapterProgress * count).round();
     return start + pagesIn + 1;
   }
 
-  // Helper for live preview while dragging slider
-  Map<String, int> getPreviewLocation(int globalPage) {
-    for (int i = 0; i < _cumulativePageCounts.length; i++) {
-      int start = _cumulativePageCounts[i];
-      int count = _chapterPageCounts[i];
-      if (globalPage <= start + count) {
-        return {'chapterIndex': i};
-      }
-    }
-    return {'chapterIndex': 0};
-  }
-
-  // --- LOCAL CALCULATION HELPERS ---
+  // --- LOCAL CALCULATION ---
   Future<void> _calculateLocalPageCounts(
     String bookId,
     String appDocPath,
@@ -284,10 +265,8 @@ class ReaderViewModel extends ChangeNotifier {
       _cumulativePageCounts.add(runningTotal);
       Uri uri = Uri.parse(url);
       String localPath = "$appDocPath${uri.path}";
-
       int pages = await EpubService().countPagesForChapter(localPath);
 
-      // Simple title extraction
       String title = "Chapter ${index + 1}";
       try {
         String content = await File(localPath).readAsString();
@@ -302,6 +281,12 @@ class ReaderViewModel extends ChangeNotifier {
               .replaceAll(RegExp(r'<[^>]*>'), '')
               .trim();
           if (clean.length < 50) title = clean;
+        } else {
+          if (content.contains('<img') ||
+              content.contains('<image') ||
+              content.contains('<svg')) {
+            title = "Illustration";
+          }
         }
       } catch (_) {}
 

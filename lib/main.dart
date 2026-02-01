@@ -10,7 +10,7 @@ void main() async {
   await ThemeService().loadTheme();
 
   // 2. Load Auth Token (for internal state, but we don't route based on it)
-  await AuthService().loadToken();
+  await AuthService().init();
 
   runApp(const MyApp());
 }

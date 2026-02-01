@@ -38,7 +38,6 @@ class LibraryService {
   }
 
   // --- PROGRESS TRACKING ---
-
   Future<void> saveProgress(
     String bookId,
     int chapterIndex,
@@ -73,8 +72,36 @@ class LibraryService {
     if (!await requestPermission()) return [];
 
     final prefs = await SharedPreferences.getInstance();
+    final Set<String> seenPaths = {};
     List<BookModel> books = [];
 
+    // 1. Scan Public Downloads (Where "Download" button saves)
+    final publicBooks = await _scanPublicDownloads(
+      prefs,
+      seenPaths,
+      forceRefresh,
+    );
+    books.addAll(publicBooks);
+
+    // 2. Scan App Documents (Legacy/Imported manually)
+    final privateBooks = await _scanAppDocuments(prefs, seenPaths);
+    books.addAll(privateBooks);
+
+    books.sort((a, b) {
+      if (b.lastRead == null) return -1;
+      if (a.lastRead == null) return 1;
+      return b.lastRead!.compareTo(a.lastRead!);
+    });
+
+    return books;
+  }
+
+  Future<List<BookModel>> _scanPublicDownloads(
+    SharedPreferences prefs,
+    Set<String> seenPaths,
+    bool forceRefresh,
+  ) async {
+    List<BookModel> found = [];
     try {
       final downloadsPath =
           await ExternalPath.getExternalStoragePublicDirectory("Download");
@@ -85,7 +112,12 @@ class LibraryService {
         List<FileSystemEntity> files = downloadsDir.listSync();
 
         for (var entity in files) {
-          if (entity is File && p.extension(entity.path) == '.epub') {
+          if (entity is File &&
+              (p.extension(entity.path) == '.epub' ||
+                  p.extension(entity.path) == '.pdf')) {
+            if (seenPaths.contains(entity.path)) continue;
+            seenPaths.add(entity.path);
+
             final fileName = p.basenameWithoutExtension(entity.path);
             final bookId = fileName.replaceAll(RegExp(r'\s+'), '_');
 
@@ -99,7 +131,11 @@ class LibraryService {
 
             if (needsProcessing) {
               await bookDataDir.create(recursive: true);
-              await _extractEpubCover(entity, coverFile);
+              if (p.extension(entity.path) == '.epub') {
+                await _extractEpubCover(entity, coverFile);
+              } else {
+                await _generatePdfCover(entity, coverFile);
+              }
             }
 
             final lastReadMillis = prefs.getInt('last_read_$bookId');
@@ -107,88 +143,11 @@ class LibraryService {
                 ? DateTime.fromMillisecondsSinceEpoch(lastReadMillis)
                 : null;
 
-            books.add(
+            found.add(
               BookModel(
                 id: bookId,
                 title: fileName,
-                filePath: entity.path, // Store local path
-                coverPath: coverFile.path,
-                isLocal: true, // Mark as local
-                author: "Unknown",
-                lastRead: lastRead,
-              ),
-            );
-          }
-        }
-      }
-    } catch (e) {
-      debugPrint("Error scanning downloads: $e");
-    }
-
-    books.addAll(await _scanImportedPdfs(prefs));
-
-    // Sort Recent First
-    books.sort((a, b) {
-      if (b.lastRead == null) return -1;
-      if (a.lastRead == null) return 1;
-      return b.lastRead!.compareTo(a.lastRead!);
-    });
-
-    return books;
-  }
-
-  // --- PDF IMPORT ---
-  Future<void> importPdf() async {
-    FilePickerResult? result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['pdf'],
-    );
-
-    if (result != null && result.files.single.path != null) {
-      File originalPdf = File(result.files.single.path!);
-      final fileName = p.basenameWithoutExtension(originalPdf.path);
-      final bookId = fileName.replaceAll(RegExp(r'\s+'), '_');
-      final appDataDir = await _getAppDataDirectory();
-      final bookDataDir = Directory('${appDataDir.path}/$bookId');
-
-      if (!await bookDataDir.exists())
-        await bookDataDir.create(recursive: true);
-
-      final savedPdf = await originalPdf.copy(
-        '${bookDataDir.path}/$fileName.pdf',
-      );
-      final coverFile = File('${bookDataDir.path}/cover.png');
-      await _generatePdfCover(savedPdf, coverFile);
-    }
-  }
-
-  Future<List<BookModel>> _scanImportedPdfs(SharedPreferences prefs) async {
-    final appDataDir = await _getAppDataDirectory();
-    List<BookModel> pdfs = [];
-    try {
-      if (!appDataDir.existsSync()) return [];
-      for (var folder in appDataDir.listSync()) {
-        if (folder is Directory) {
-          File? pdfFile;
-          File? coverFile;
-          for (var f in folder.listSync()) {
-            if (f is File) {
-              if (p.extension(f.path) == '.pdf') pdfFile = f;
-              if (p.basename(f.path).contains('cover')) coverFile = f;
-            }
-          }
-          if (pdfFile != null && coverFile != null) {
-            final id = p.basename(folder.path);
-            final lastReadMillis = prefs.getInt('last_read_$id');
-            final lastRead = lastReadMillis != null
-                ? DateTime.fromMillisecondsSinceEpoch(lastReadMillis)
-                : null;
-
-            pdfs.add(
-              BookModel(
-                id: id,
-                title: p.basenameWithoutExtension(pdfFile.path),
-                filePath: pdfFile.path,
+                filePath: entity.path,
                 coverPath: coverFile.path,
                 isLocal: true,
                 author: "Unknown",
@@ -198,11 +157,94 @@ class LibraryService {
           }
         }
       }
-    } catch (_) {}
-    return pdfs;
+    } catch (e) {
+      debugPrint("Error scanning public downloads: $e");
+    }
+    return found;
   }
 
-  // --- HELPERS ---
+  Future<List<BookModel>> _scanAppDocuments(
+    SharedPreferences prefs,
+    Set<String> seenPaths,
+  ) async {
+    final appDataDir = await _getAppDataDirectory();
+    List<BookModel> found = [];
+    try {
+      if (!appDataDir.existsSync()) return [];
+      for (var folder in appDataDir.listSync()) {
+        if (folder is Directory) {
+          File? bookFile;
+          File? coverFile;
+          for (var f in folder.listSync()) {
+            if (f is File) {
+              if (p.extension(f.path) == '.pdf' ||
+                  p.extension(f.path) == '.epub')
+                bookFile = f;
+              if (p.basename(f.path).contains('cover')) coverFile = f;
+            }
+          }
+          if (bookFile != null && coverFile != null) {
+            if (seenPaths.contains(bookFile.path)) continue;
+            seenPaths.add(bookFile.path);
+
+            final id = p.basename(folder.path);
+            final lastReadMillis = prefs.getInt('last_read_$id');
+            final lastRead = lastReadMillis != null
+                ? DateTime.fromMillisecondsSinceEpoch(lastReadMillis)
+                : null;
+
+            found.add(
+              BookModel(
+                id: id,
+                title: p.basenameWithoutExtension(bookFile.path),
+                filePath: bookFile.path,
+                coverPath: coverFile.path,
+                isLocal: true,
+                author: "Unknown",
+                lastRead: lastRead,
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint("Error scanning private docs: $e");
+    }
+    return found;
+  }
+
+  // --- HELPERS (Unchanged) ---
+  Future<void> importPdf() async {
+    // Keep this manual import logic if you want users to pick files from random folders
+    FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['pdf', 'epub'],
+    );
+
+    if (result != null && result.files.single.path != null) {
+      File originalFile = File(result.files.single.path!);
+      final fileName = p.basenameWithoutExtension(originalFile.path);
+      final bookId = fileName.replaceAll(RegExp(r'\s+'), '_');
+      final appDataDir = await _getAppDataDirectory();
+      final bookDataDir = Directory('${appDataDir.path}/$bookId');
+
+      if (!await bookDataDir.exists())
+        await bookDataDir.create(recursive: true);
+
+      final ext = p.extension(originalFile.path);
+      final savedFile = await originalFile.copy(
+        '${bookDataDir.path}/$fileName$ext',
+      );
+      final coverFile = File('${bookDataDir.path}/cover.png');
+
+      if (ext == '.pdf') {
+        await _generatePdfCover(savedFile, coverFile);
+      } else {
+        await _extractEpubCover(savedFile, coverFile);
+      }
+    }
+  }
+
   Future<void> _generatePdfCover(File pdfFile, File targetCoverFile) async {
     try {
       final doc = await PdfDocument.openFile(pdfFile.path);

@@ -8,9 +8,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:archive/archive.dart';
 import 'package:xml/xml.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:pdfrx/pdfrx.dart';
-import 'package:image/image.dart' as img;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:printing/printing.dart';
 
 import '../../models/book_model.dart';
 
@@ -20,6 +19,10 @@ class LibraryService {
   LibraryService._internal();
 
   static const String _appFolderName = "MyReaderData";
+
+  // 🟢 SINGLE SOURCE OF TRUTH
+  List<BookModel> _loadedBooks = [];
+  List<BookModel> get loadedBooks => _loadedBooks;
 
   // --- PERMISSIONS ---
   Future<bool> requestPermission() async {
@@ -75,17 +78,11 @@ class LibraryService {
     final Set<String> seenPaths = {};
     List<BookModel> books = [];
 
-    // 1. Scan Public Downloads (Where "Download" button saves)
-    final publicBooks = await _scanPublicDownloads(
-      prefs,
-      seenPaths,
-      forceRefresh,
-    );
-    books.addAll(publicBooks);
+    // 1. Scan Public Downloads
+    books.addAll(await _scanPublicDownloads(prefs, seenPaths));
 
-    // 2. Scan App Documents (Legacy/Imported manually)
-    final privateBooks = await _scanAppDocuments(prefs, seenPaths);
-    books.addAll(privateBooks);
+    // 2. Scan App Documents
+    books.addAll(await _scanAppDocuments(prefs, seenPaths));
 
     books.sort((a, b) {
       if (b.lastRead == null) return -1;
@@ -93,13 +90,52 @@ class LibraryService {
       return b.lastRead!.compareTo(a.lastRead!);
     });
 
+    // 🟢 CRITICAL FIX: Ensure cache is updated for the Cloud Tab to see
+    _loadedBooks = books;
+
     return books;
   }
 
+  // 🟢 SMART CHECK: Is this online book already on device?
+  bool isBookDownloaded(String onlineTitle) {
+    if (_loadedBooks.isEmpty) return false;
+
+    final cleanOnline = _normalize(onlineTitle);
+
+    return _loadedBooks.any((localBook) {
+      final cleanLocal = _normalize(localBook.title);
+
+      // 1. Exact Title Match
+      if (cleanLocal == cleanOnline) return true;
+
+      // 2. Filename Match (The file might be 'harry_potter.epub' vs 'Harry Potter')
+      final filename = p
+          .basenameWithoutExtension(localBook.filePath ?? "")
+          .toLowerCase()
+          .replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+      if (filename.isNotEmpty && filename == cleanOnline) return true;
+
+      // 3. Fuzzy/Substring Match
+      if (cleanLocal.length > 4 && cleanOnline.length > 4) {
+        if (cleanLocal.contains(cleanOnline) ||
+            cleanOnline.contains(cleanLocal)) {
+          return true;
+        }
+      }
+
+      return false;
+    });
+  }
+
+  String _normalize(String input) {
+    return input.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+  }
+
+  // --- FAST SCANNERS ---
   Future<List<BookModel>> _scanPublicDownloads(
     SharedPreferences prefs,
     Set<String> seenPaths,
-    bool forceRefresh,
   ) async {
     List<BookModel> found = [];
     try {
@@ -109,7 +145,8 @@ class LibraryService {
       final appDataDir = await _getAppDataDirectory();
 
       if (downloadsDir.existsSync()) {
-        List<FileSystemEntity> files = downloadsDir.listSync();
+        // 🟢 RECURSIVE: Finds books in subfolders
+        List<FileSystemEntity> files = downloadsDir.listSync(recursive: true);
 
         for (var entity in files) {
           if (entity is File &&
@@ -124,13 +161,28 @@ class LibraryService {
             final bookDataDir = Directory('${appDataDir.path}/$bookId');
             final coverFile = File('${bookDataDir.path}/cover.png');
 
-            bool needsProcessing =
-                !await bookDataDir.exists() ||
-                !await coverFile.exists() ||
-                forceRefresh;
+            // 🟢 SMART LOGIC: Only process if absolutely necessary
+            bool needsProcessing = false;
+
+            if (!await bookDataDir.exists()) {
+              await bookDataDir.create(recursive: true);
+              needsProcessing = true;
+            } else if (!await coverFile.exists()) {
+              needsProcessing = true;
+            } else {
+              // Time Check: Is book newer than cover?
+              try {
+                final bookStat = await entity.stat();
+                final coverStat = await coverFile.stat();
+                if (bookStat.modified.isAfter(coverStat.modified)) {
+                  needsProcessing = true;
+                }
+              } catch (_) {
+                needsProcessing = true;
+              }
+            }
 
             if (needsProcessing) {
-              await bookDataDir.create(recursive: true);
               if (p.extension(entity.path) == '.epub') {
                 await _extractEpubCover(entity, coverFile);
               } else {
@@ -171,11 +223,16 @@ class LibraryService {
     List<BookModel> found = [];
     try {
       if (!appDataDir.existsSync()) return [];
-      for (var folder in appDataDir.listSync()) {
+
+      final folders = appDataDir.listSync();
+
+      for (var folder in folders) {
         if (folder is Directory) {
           File? bookFile;
           File? coverFile;
-          for (var f in folder.listSync()) {
+
+          final folderFiles = folder.listSync();
+          for (var f in folderFiles) {
             if (f is File) {
               if (p.extension(f.path) == '.pdf' ||
                   p.extension(f.path) == '.epub')
@@ -183,6 +240,7 @@ class LibraryService {
               if (p.basename(f.path).contains('cover')) coverFile = f;
             }
           }
+
           if (bookFile != null && coverFile != null) {
             if (seenPaths.contains(bookFile.path)) continue;
             seenPaths.add(bookFile.path);
@@ -213,9 +271,8 @@ class LibraryService {
     return found;
   }
 
-  // --- HELPERS (Unchanged) ---
+  // --- MANUAL IMPORT ---
   Future<void> importPdf() async {
-    // Keep this manual import logic if you want users to pick files from random folders
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['pdf', 'epub'],
@@ -247,23 +304,16 @@ class LibraryService {
 
   Future<void> _generatePdfCover(File pdfFile, File targetCoverFile) async {
     try {
-      final doc = await PdfDocument.openFile(pdfFile.path);
-      final page = doc.pages[0];
-      final PdfImage? rawPdfImage = await page.render(
-        width: 300,
-        height: (300 * page.height / page.width).toInt(),
-      );
-      if (rawPdfImage != null) {
-        final img.Image image = img.Image.fromBytes(
-          width: rawPdfImage.width,
-          height: rawPdfImage.height,
-          bytes: rawPdfImage.pixels.buffer,
-          order: img.ChannelOrder.rgba,
-          numChannels: 4,
-        );
-        await targetCoverFile.writeAsBytes(img.encodePng(image));
+      final pdfBytes = await pdfFile.readAsBytes();
+      await for (final page in Printing.raster(
+        pdfBytes,
+        dpi: 150,
+        pages: [0],
+      )) {
+        final pngBytes = await page.toPng();
+        await targetCoverFile.writeAsBytes(pngBytes);
+        break;
       }
-      await doc.dispose();
     } catch (e) {
       debugPrint("Error generating PDF cover: $e");
     }
@@ -273,10 +323,12 @@ class LibraryService {
     try {
       final bytes = await epubFile.readAsBytes();
       final archive = ZipDecoder().decodeBytes(bytes);
+
       ArchiveFile? containerFile = archive.files.firstWhere(
         (f) => f.name.contains('container.xml'),
         orElse: () => archive.files.first,
       );
+
       final containerXml = XmlDocument.parse(
         utf8.decode(containerFile.content as List<int>),
       );
@@ -284,25 +336,30 @@ class LibraryService {
           .findAllElements('rootfile')
           .first
           .getAttribute('full-path')!;
+
       ArchiveFile? opfFile = archive.files.firstWhere(
         (f) => f.name.contains(rootPath),
         orElse: () => archive.files.first,
       );
+
       final opfXml = XmlDocument.parse(
         utf8.decode(opfFile.content as List<int>),
       );
       String? coverHref;
       String? coverId;
+
       for (var meta in opfXml.findAllElements('meta')) {
         if (meta.getAttribute('name') == 'cover')
           coverId = meta.getAttribute('content');
       }
+
       if (coverId != null) {
         for (var item in opfXml.findAllElements('item')) {
           if (item.getAttribute('id') == coverId)
             coverHref = item.getAttribute('href');
         }
       }
+
       if (coverHref == null) {
         try {
           final possible = archive.files.firstWhere(
@@ -313,6 +370,7 @@ class LibraryService {
           coverHref = possible.name;
         } catch (_) {}
       }
+
       if (coverHref != null) {
         coverHref = Uri.decodeFull(coverHref);
         final coverFilename = p.basename(coverHref);

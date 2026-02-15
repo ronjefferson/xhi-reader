@@ -1,10 +1,12 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:pdfrx/pdfrx.dart'; // 🟢 REQUIRED for PDF support
+
 import '../../models/book_model.dart';
 import '../../core/services/epub_service.dart';
 import '../../core/services/library_service.dart';
-import '../../core/services/api_service.dart'; // REQUIRED for BaseUrl
+import '../../core/services/api_service.dart';
 import '../../core/services/auth_service.dart';
 
 class ReaderViewModel extends ChangeNotifier {
@@ -12,34 +14,48 @@ class ReaderViewModel extends ChangeNotifier {
 
   // --- State ---
   String? epubUrl;
+  String? pdfPath; // 🟢 PDF Path
   bool isReady = false;
   String? errorMessage;
+  bool isPdf = false; // 🟢 PDF Flag
 
-  // --- Navigation ---
+  // --- Navigation (EPUB) ---
   List<String> spine = [];
   List<String> chapterTitles = [];
   int currentChapterIndex = 0;
-
-  // --- Pagination ---
   List<int> _chapterPageCounts = [];
   List<int> _cumulativePageCounts = [];
-  int _totalBookPages = 1;
   double _currentChapterProgress = 0.0;
 
-  // --- Events ---
-  double? requestScrollToProgress;
+  // --- Navigation (PDF) ---
+  PdfDocument? pdfDoc;
+  int _pdfCurrentPage = 1;
+  int _pdfTotalPages = 1;
+  List<PdfOutlineNode> pdfOutline = [];
+
+  // --- Shared ---
+  int _totalBookPages = 1;
+  double? requestScrollToProgress; // For EPUB
+  int? requestJumpToPage; // 🟢 For PDF
 
   ReaderViewModel({required this.book});
 
-  int get totalBookPages => _totalBookPages;
+  int get totalBookPages => isPdf ? _pdfTotalPages : _totalBookPages;
 
   // --- INITIALIZATION ---
   Future<void> initializeReader() async {
     try {
-      if (book.isLocal) {
-        await _initLocalMode();
+      // Check file extension to detect PDF
+      isPdf = book.filePath?.toLowerCase().endsWith('.pdf') ?? false;
+
+      if (isPdf) {
+        await _initPdfMode();
       } else {
-        await _initOnlineMode();
+        if (book.isLocal) {
+          await _initLocalEpub();
+        } else {
+          await _initOnlineEpub();
+        }
       }
     } catch (e) {
       errorMessage = "Error loading book: $e";
@@ -48,8 +64,56 @@ class ReaderViewModel extends ChangeNotifier {
     }
   }
 
-  // --- MODE 1: LOCAL ---
-  Future<void> _initLocalMode() async {
+  // --- MODE 1: PDF ---
+  Future<void> _initPdfMode() async {
+    if (book.filePath == null) throw "PDF file path missing.";
+    pdfPath = book.filePath;
+
+    try {
+      // Open PDF to get stats
+      pdfDoc = await PdfDocument.openFile(pdfPath!);
+      _pdfTotalPages = pdfDoc!.pages.length;
+      try {
+        pdfOutline = await pdfDoc!.loadOutline();
+      } catch (_) {}
+
+      // Create simple chapter titles from Outline or generic pages
+      chapterTitles = _flattenPdfOutline(pdfOutline);
+      if (chapterTitles.isEmpty) {
+        // If no outline, create generic "Page 10, 20..." markers so the list isn't empty
+        chapterTitles = [];
+      }
+    } catch (e) {
+      debugPrint("Error opening PDF: $e");
+    }
+
+    // Restore Progress
+    final savedData = await LibraryService().getLastProgress(book.id);
+    if (savedData != null) {
+      _pdfCurrentPage = savedData['chapterIndex'] ?? 1;
+      if (_pdfCurrentPage < 1) _pdfCurrentPage = 1;
+      if (_pdfCurrentPage > _pdfTotalPages) _pdfCurrentPage = _pdfTotalPages;
+
+      requestJumpToPage = _pdfCurrentPage;
+    }
+
+    isReady = true;
+    notifyListeners();
+  }
+
+  List<String> _flattenPdfOutline(List<PdfOutlineNode> nodes) {
+    List<String> titles = [];
+    for (var node in nodes) {
+      titles.add(node.title);
+      if (node.children.isNotEmpty) {
+        titles.addAll(_flattenPdfOutline(node.children));
+      }
+    }
+    return titles;
+  }
+
+  // --- MODE 2: LOCAL EPUB ---
+  Future<void> _initLocalEpub() async {
     if (book.filePath == null) throw "Local file path missing.";
     final appDocPath = (await getApplicationDocumentsDirectory()).path;
     await EpubService().startServer(appDocPath);
@@ -62,12 +126,11 @@ class ReaderViewModel extends ChangeNotifier {
     await _calculateLocalPageCounts(book.id, appDocPath);
 
     final savedData = await LibraryService().getLastProgress(book.id);
-    _restoreState(savedData);
+    _restoreEpubState(savedData);
   }
 
-  // --- MODE 2: ONLINE ---
-  Future<void> _initOnlineMode() async {
-    // 1. Fetch Manifest
+  // --- MODE 3: ONLINE EPUB ---
+  Future<void> _initOnlineEpub() async {
     final manifest = await ApiService().fetchManifest(book.id);
     if (manifest == null) throw "Could not fetch book manifest.";
 
@@ -78,26 +141,18 @@ class ReaderViewModel extends ChangeNotifier {
     int runningTotal = 0;
 
     final List<dynamic> chapters = manifest['chapters'];
-
-    // 🟢 SINGLE SOURCE OF TRUTH: Get the current active Base URL
     final String currentBaseUrl = ApiService.baseUrl;
 
     for (var chap in chapters) {
       String rawUrl = chap['url'];
-
-      // 🟢 DYNAMIC SWAP:
-      // If the URL from DB is localhost/127.0.0.1, replace it with currentBaseUrl
-      // (This handles switching between Emulator Loopback and Ngrok automatically)
       if (rawUrl.contains('localhost') || rawUrl.contains('127.0.0.1')) {
         rawUrl = rawUrl.replaceFirst(
           RegExp(r'http://(localhost|127\.0\.0\.1)(:\d+)?'),
           currentBaseUrl,
         );
       }
-
       spine.add(rawUrl);
 
-      // 🟢 TITLE LOGIC: Rename "Chapter X" to "Illustration" if needed
       String t = chap['title'] ?? "";
       final genericNameRegex = RegExp(r'^Chapter\s*\d*$', caseSensitive: false);
       if (t.trim().isEmpty || genericNameRegex.hasMatch(t.trim())) {
@@ -105,7 +160,6 @@ class ReaderViewModel extends ChangeNotifier {
       }
       chapterTitles.add(t);
 
-      // Estimate Pages
       int size = chap['sizeBytes'] ?? 2000;
       int pages = (size / 2000).ceil();
       if (pages < 1) pages = 1;
@@ -116,7 +170,6 @@ class ReaderViewModel extends ChangeNotifier {
     }
     _totalBookPages = runningTotal > 0 ? runningTotal : 1;
 
-    // 2. Fetch Progress
     final cloudData = await ApiService().getProgress(book.id);
     Map<String, dynamic>? progressData;
     if (cloudData != null) {
@@ -125,10 +178,10 @@ class ReaderViewModel extends ChangeNotifier {
         'progress': cloudData['progress_percent'],
       };
     }
-    _restoreState(progressData);
+    _restoreEpubState(progressData);
   }
 
-  // --- URL BUILDER ---
+  // --- EPUB HELPERS ---
   void _updateUrl(String baseUrl, {bool posEnd = false}) {
     final String v = DateTime.now().millisecondsSinceEpoch.toString();
     String separator = baseUrl.contains('?') ? '&' : '?';
@@ -146,8 +199,7 @@ class ReaderViewModel extends ChangeNotifier {
     epubUrl = finalUrl;
   }
 
-  // --- STATE RESTORATION ---
-  void _restoreState(Map<String, dynamic>? data) {
+  void _restoreEpubState(Map<String, dynamic>? data) {
     if (data != null) {
       currentChapterIndex = data['chapterIndex'] ?? 0;
       double pct = (data['progress'] is int)
@@ -164,84 +216,120 @@ class ReaderViewModel extends ChangeNotifier {
     }
   }
 
-  void _saveCurrentProgress() {
-    if (book.isLocal) {
-      LibraryService().saveProgress(
-        book.id,
-        currentChapterIndex,
-        _currentChapterProgress,
-      );
+  // --- SAVE PROGRESS ---
+  void saveCurrentProgress() {
+    if (isPdf) {
+      // PDF: Save Page Number as 'chapterIndex'
+      LibraryService().saveProgress(book.id, _pdfCurrentPage, 0.0);
     } else {
-      ApiService().saveProgress(
-        book.id,
-        currentChapterIndex,
-        _currentChapterProgress,
-      );
+      // EPUB: Save Chapter Index + Scroll %
+      if (book.isLocal) {
+        LibraryService().saveProgress(
+          book.id,
+          currentChapterIndex,
+          _currentChapterProgress,
+        );
+      } else {
+        ApiService().saveProgress(
+          book.id,
+          currentChapterIndex,
+          _currentChapterProgress,
+        );
+      }
     }
   }
 
-  // --- NAVIGATION ---
+  // --- NAVIGATION (UNIFIED) ---
+
+  // 🟢 NEW: Called by PDF Viewer when page changes
+  void onPdfPageChanged(int page) {
+    _pdfCurrentPage = page;
+    saveCurrentProgress();
+    notifyListeners();
+  }
+
+  // 🟢 NEW: Unified Jump (Slider)
+  void jumpToGlobalPage(int globalPage) {
+    if (isPdf) {
+      _pdfCurrentPage = globalPage.clamp(1, _pdfTotalPages);
+      requestJumpToPage = _pdfCurrentPage;
+      notifyListeners();
+      saveCurrentProgress();
+    } else {
+      globalPage = globalPage.clamp(1, _totalBookPages);
+      for (int i = 0; i < _cumulativePageCounts.length; i++) {
+        int start = _cumulativePageCounts[i];
+        int count = _chapterPageCounts[i];
+
+        if (globalPage <= start + count) {
+          int localPage = globalPage - start;
+          double percent = (localPage - 1) / (count > 1 ? count - 1 : 1);
+          percent = percent.clamp(0.0, 1.0);
+
+          if (currentChapterIndex != i) {
+            currentChapterIndex = i;
+            _updateUrl(spine[i]);
+          }
+          requestScrollToProgress = percent;
+          notifyListeners();
+          saveCurrentProgress();
+          return;
+        }
+      }
+    }
+  }
+
+  // 🟢 NEW: Renamed for clarity (was updateScrollProgress)
+  void updateEpubScrollProgress(double progress) {
+    _currentChapterProgress = progress;
+    saveCurrentProgress();
+  }
+
   void nextChapter() {
-    if (hasNext) {
+    if (!isPdf && currentChapterIndex < spine.length - 1) {
       currentChapterIndex++;
       _updateUrl(spine[currentChapterIndex]);
       requestScrollToProgress = 0.0;
       _currentChapterProgress = 0.0;
       notifyListeners();
-      _saveCurrentProgress();
+      saveCurrentProgress();
     }
   }
 
   void previousChapter() {
-    if (hasPrevious) {
+    if (!isPdf && currentChapterIndex > 0) {
       currentChapterIndex--;
       _updateUrl(spine[currentChapterIndex], posEnd: true);
       requestScrollToProgress = 1.0;
       _currentChapterProgress = 1.0;
       notifyListeners();
-      _saveCurrentProgress();
+      saveCurrentProgress();
     }
   }
 
   void jumpToChapter(int index) {
-    if (index >= 0 && index < spine.length) {
-      currentChapterIndex = index;
-      _updateUrl(spine[index]);
-      requestScrollToProgress = 0.0;
-      notifyListeners();
-      _saveCurrentProgress();
-    }
-  }
-
-  void jumpToGlobalPage(int globalPage) {
-    globalPage = globalPage.clamp(1, _totalBookPages);
-    for (int i = 0; i < _cumulativePageCounts.length; i++) {
-      int start = _cumulativePageCounts[i];
-      int count = _chapterPageCounts[i];
-
-      if (globalPage <= start + count) {
-        int localPage = globalPage - start;
-        double percent = (localPage - 1) / (count > 1 ? count - 1 : 1);
-        percent = percent.clamp(0.0, 1.0);
-
-        if (currentChapterIndex != i) {
-          currentChapterIndex = i;
-          _updateUrl(spine[i]);
-        }
-        requestScrollToProgress = percent;
+    if (isPdf) {
+      if (index >= 0 && index < pdfOutline.length) {
+        final node = pdfOutline[index];
+        // PDF Outline destinations can be tricky, simplified to pageNumber
+        requestJumpToPage = node.dest?.pageNumber ?? 1;
         notifyListeners();
-        _saveCurrentProgress();
-        return;
+      }
+    } else {
+      if (index >= 0 && index < spine.length) {
+        currentChapterIndex = index;
+        _updateUrl(spine[index]);
+        requestScrollToProgress = 0.0;
+        notifyListeners();
+        saveCurrentProgress();
       }
     }
   }
 
-  void updateScrollProgress(double progress) {
-    _currentChapterProgress = progress;
-    _saveCurrentProgress();
-  }
-
+  // --- GETTERS (UNIFIED) ---
   int getCurrentGlobalPage() {
+    if (isPdf) return _pdfCurrentPage;
+
     if (_chapterPageCounts.isEmpty) return 1;
     if (currentChapterIndex >= _cumulativePageCounts.length) return 1;
     int start = _cumulativePageCounts[currentChapterIndex];
@@ -250,7 +338,7 @@ class ReaderViewModel extends ChangeNotifier {
     return start + pagesIn + 1;
   }
 
-  // --- LOCAL CALCULATION ---
+  // --- LOCAL CALC ---
   Future<void> _calculateLocalPageCounts(
     String bookId,
     String appDocPath,
@@ -298,7 +386,4 @@ class ReaderViewModel extends ChangeNotifier {
     _totalBookPages = runningTotal > 0 ? runningTotal : 1;
     notifyListeners();
   }
-
-  bool get hasNext => currentChapterIndex < spine.length - 1;
-  bool get hasPrevious => currentChapterIndex > 0;
 }

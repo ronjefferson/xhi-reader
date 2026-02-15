@@ -8,13 +8,19 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../models/book_model.dart';
+import '../../models/download_task.dart';
+import '../../models/upload_task.dart';
 import '../../core/services/library_service.dart';
 import '../../core/services/auth_service.dart';
 import '../../core/services/api_service.dart';
+import '../../core/services/download_service.dart';
+import '../../core/services/upload_service.dart';
+
 import '../reader/reader_view.dart';
 import '../settings/settings_view.dart';
 import '../auth/login_view.dart';
-import '../widgets/progress_book_cover.dart';
+import 'widgets/progress_book_cover.dart';
+import 'queue_view.dart';
 
 class HomeView extends StatefulWidget {
   const HomeView({super.key});
@@ -32,8 +38,6 @@ class _HomeViewState extends State<HomeView>
   List<BookModel> onlineBooks = [];
   bool isLoadingLocal = true;
   bool isLoadingOnline = false;
-
-  final Map<int, double> _downloadProgress = {};
 
   @override
   void initState() {
@@ -57,17 +61,65 @@ class _HomeViewState extends State<HomeView>
         _loadOnlineBooks();
       }
     });
+
+    DownloadService().addListener(_onQueueUpdate);
+    UploadService().addListener(_onQueueUpdate);
+
+    DownloadService().onBookDownloaded = () {
+      if (mounted) {
+        _loadLocalBooks(force: true, isRefresh: true);
+        if (AuthService().isLoggedIn) _loadOnlineBooks(silent: true);
+
+        ScaffoldMessenger.of(context).clearSnackBars();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Download completed!"),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 1),
+          ),
+        );
+      }
+    };
+
+    UploadService().onUploadCompleted = () async {
+      if (mounted) {
+        await Future.delayed(const Duration(seconds: 1));
+        if (!mounted) return;
+
+        await _loadOnlineBooks(silent: true);
+
+        ScaffoldMessenger.of(context).clearSnackBars();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Cloud sync complete."),
+            backgroundColor: Colors.blue,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    };
   }
 
   @override
   void dispose() {
     _sessionSub?.cancel();
     _tabController.dispose();
+    DownloadService().removeListener(_onQueueUpdate);
+    UploadService().removeListener(_onQueueUpdate);
+    DownloadService().onBookDownloaded = null;
+    UploadService().onUploadCompleted = null;
     super.dispose();
   }
 
-  Future<void> _loadLocalBooks({bool force = false}) async {
-    setState(() => isLoadingLocal = true);
+  void _onQueueUpdate() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _loadLocalBooks({
+    bool force = false,
+    bool isRefresh = false,
+  }) async {
+    if (!isRefresh) setState(() => isLoadingLocal = true);
     final loaded = await LibraryService().scanForEpubs(forceRefresh: force);
     if (mounted) {
       setState(() {
@@ -77,8 +129,11 @@ class _HomeViewState extends State<HomeView>
     }
   }
 
-  Future<void> _loadOnlineBooks() async {
-    setState(() => isLoadingOnline = true);
+  Future<void> _loadOnlineBooks({
+    bool silent = false,
+    bool isRefresh = false,
+  }) async {
+    if (!silent && !isRefresh) setState(() => isLoadingOnline = true);
     try {
       final loaded = await ApiService().fetchUserBooks();
       if (mounted) {
@@ -86,13 +141,14 @@ class _HomeViewState extends State<HomeView>
           onlineBooks = loaded;
           isLoadingOnline = false;
         });
+        UploadService().updateOnlineBooksCache(loaded);
       }
     } catch (e) {
-      if (mounted) setState(() => isLoadingOnline = false);
+      if (mounted && !silent && !isRefresh)
+        setState(() => isLoadingOnline = false);
     }
   }
 
-  // --- UPLOAD ---
   Future<void> _pickAndUploadFile() async {
     if (!AuthService().isLoggedIn) {
       _showLoginNeededSnackBar();
@@ -106,51 +162,44 @@ class _HomeViewState extends State<HomeView>
 
     if (result != null && result.files.single.path != null) {
       final file = File(result.files.single.path!);
-      await _uploadFileProcess(file);
+      UploadService().addToQueue(file);
+      _showUploadStartedSnackBar();
     }
   }
 
-  Future<void> _uploadFileProcess(File file) async {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => const Center(child: CircularProgressIndicator()),
-    );
+  Future<void> _uploadFromContextMenu(File file, String title) async {
+    UploadService().addToQueue(file, knownTitle: title);
+    _showUploadStartedSnackBar();
+  }
 
-    try {
-      final msg = await ApiService().uploadBook(file);
-
-      if (mounted) {
-        Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(msg), backgroundColor: Colors.green),
-        );
-        _loadOnlineBooks();
-        _tabController.animateTo(1);
-      }
-    } catch (e) {
-      if (mounted) {
-        Navigator.pop(context);
-        if (e.toString().contains("Book already exists")) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("You already have this book in the cloud."),
+  void _showUploadStartedSnackBar() {
+    if (mounted) {
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text("Added to upload queue"),
+          duration: const Duration(milliseconds: 1500),
+          action: SnackBarAction(
+            label: "View",
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const QueueView()),
             ),
-          );
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text("Upload Error: $e"),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-      }
+          ),
+        ),
+      );
     }
   }
 
-  // --- DOWNLOAD ---
   Future<void> _downloadOnlineBook(BookModel book) async {
+    if (LibraryService().isBookDownloaded(book.title)) {
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Book is already downloaded.")),
+      );
+      return;
+    }
+
     String savePath;
     final safeTitle = book.title.replaceAll(RegExp(r'[^\w\s\.]'), '');
     int bookId = int.parse(book.id.toString());
@@ -161,10 +210,12 @@ class _HomeViewState extends State<HomeView>
       } else if (await Permission.storage.request().isGranted) {
         savePath = "/storage/emulated/0/Download/$safeTitle.epub";
       } else {
-        if (mounted)
+        if (mounted) {
+          ScaffoldMessenger.of(context).clearSnackBars();
           ScaffoldMessenger.of(
             context,
           ).showSnackBar(const SnackBar(content: Text("Permission denied.")));
+        }
         return;
       }
     } else {
@@ -172,50 +223,28 @@ class _HomeViewState extends State<HomeView>
       savePath = "${dir.path}/$safeTitle.epub";
     }
 
-    setState(() {
-      _downloadProgress[bookId] = 0.0;
-    });
+    DownloadService().addToQueue(
+      bookId,
+      book.title,
+      book.coverUrl ?? "",
+      savePath,
+    );
 
-    try {
-      await ApiService().downloadBook(
-        bookId: bookId,
-        savePath: savePath,
-        onProgress: (received, total) {
-          if (total != -1) {
-            setState(() {
-              _downloadProgress[bookId] = received / total;
-            });
-          }
-        },
+    if (mounted) {
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Added '${book.title}' to queue"),
+          duration: const Duration(milliseconds: 1500),
+          action: SnackBarAction(
+            label: "View",
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const QueueView()),
+            ),
+          ),
+        ),
       );
-
-      if (mounted) {
-        setState(() {
-          _downloadProgress.remove(bookId);
-        });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("Saved to Downloads: $safeTitle.epub"),
-            backgroundColor: Colors.green,
-          ),
-        );
-
-        await _loadLocalBooks(force: true);
-        _tabController.animateTo(0);
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _downloadProgress.remove(bookId);
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("Download Failed: $e"),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
     }
   }
 
@@ -227,32 +256,48 @@ class _HomeViewState extends State<HomeView>
         setState(
           () => localBooks.removeWhere((b) => b.filePath == book.filePath),
         );
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Book deleted from device")),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).clearSnackBars();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Book deleted from device"),
+              duration: Duration(seconds: 1),
+            ),
+          );
+        }
       }
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text("Error deleting file: $e")));
+      if (mounted) {
+        ScaffoldMessenger.of(context).clearSnackBars();
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text("Error: $e")));
+      }
     }
   }
 
   Future<void> _deleteOnlineBook(BookModel book) async {
     final int index = onlineBooks.indexOf(book);
     setState(() => onlineBooks.remove(book));
-
     try {
       int bookId = int.parse(book.id.toString());
       final success = await ApiService().deleteBook(bookId);
       if (!success) throw "Server failure";
-      if (mounted)
+
+      if (mounted) {
+        UploadService().updateOnlineBooksCache(onlineBooks);
+        ScaffoldMessenger.of(context).clearSnackBars();
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Book deleted from cloud")),
+          const SnackBar(
+            content: Text("Book deleted from cloud"),
+            duration: Duration(seconds: 1),
+          ),
         );
+      }
     } catch (e) {
       if (mounted) {
         setState(() => onlineBooks.insert(index, book));
+        ScaffoldMessenger.of(context).clearSnackBars();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text("Failed to delete book."),
@@ -264,9 +309,11 @@ class _HomeViewState extends State<HomeView>
   }
 
   void _showLoginNeededSnackBar() {
+    ScaffoldMessenger.of(context).clearSnackBars();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: const Text("Login to upload books to the cloud."),
+        duration: const Duration(seconds: 2),
         action: SnackBarAction(label: "Login", onPressed: _handleProfileTap),
       ),
     );
@@ -300,14 +347,21 @@ class _HomeViewState extends State<HomeView>
 
   void _handleProfileTap() async {
     if (AuthService().isLoggedIn) {
+      ScaffoldMessenger.of(context).clearSnackBars();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("You are already logged in.")),
       );
     } else {
       final bool? result = await Navigator.push(
         context,
-        MaterialPageRoute(builder: (context) => const LoginView()),
+        PageRouteBuilder(
+          pageBuilder: (context, animation, secondaryAnimation) =>
+              const LoginView(),
+          transitionDuration: Duration.zero,
+          reverseTransitionDuration: Duration.zero,
+        ),
       );
+
       if (result == true) {
         setState(() {});
         _loadOnlineBooks();
@@ -321,9 +375,13 @@ class _HomeViewState extends State<HomeView>
     await AuthService().logout();
     setState(() => onlineBooks.clear());
     _tabController.animateTo(0);
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text("Logged out successfully")));
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("Logged out successfully"),
+        duration: Duration(seconds: 1),
+      ),
+    );
   }
 
   @override
@@ -336,13 +394,9 @@ class _HomeViewState extends State<HomeView>
         title: const Text("My Library"),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () {
-              if (_tabController.index == 0)
-                _loadLocalBooks(force: true);
-              else if (isLoggedIn)
-                _loadOnlineBooks();
-            },
+            icon: const Icon(Icons.add),
+            tooltip: "Upload Book",
+            onPressed: _pickAndUploadFile,
           ),
         ],
         bottom: TabBar(
@@ -357,30 +411,35 @@ class _HomeViewState extends State<HomeView>
         ),
       ),
       drawer: _buildDrawer(isLoggedIn),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _pickAndUploadFile,
-        child: const Icon(Icons.add),
-      ),
       body: TabBarView(
         controller: _tabController,
         children: [
-          KeepAliveBookGrid(
-            books: localBooks,
-            isLoading: isLoadingLocal,
-            isLocal: true,
-            onUploadRequest: _uploadFileProcess,
-            onDeleteRequest: _deleteLocalBook,
-            onDownloadRequest: null,
+          RefreshIndicator(
+            onRefresh: () async =>
+                _loadLocalBooks(force: true, isRefresh: true),
+            child: KeepAliveBookGrid(
+              books: localBooks,
+              isLoading: isLoadingLocal,
+              isLocal: true,
+              onlineBooksReference: onlineBooks,
+              onUploadRequest: _uploadFromContextMenu,
+              onDeleteRequest: _deleteLocalBook,
+              onDownloadRequest: null,
+            ),
           ),
+
           isLoggedIn
-              ? KeepAliveBookGrid(
-                  books: onlineBooks,
-                  isLoading: isLoadingOnline,
-                  isLocal: false,
-                  onUploadRequest: null,
-                  onDeleteRequest: _deleteOnlineBook,
-                  onDownloadRequest: _downloadOnlineBook,
-                  activeDownloads: _downloadProgress,
+              ? RefreshIndicator(
+                  onRefresh: () async => _loadOnlineBooks(isRefresh: true),
+                  child: KeepAliveBookGrid(
+                    books: onlineBooks,
+                    isLoading: isLoadingOnline,
+                    isLocal: false,
+                    onlineBooksReference: null,
+                    onUploadRequest: null,
+                    onDeleteRequest: _deleteOnlineBook,
+                    onDownloadRequest: _downloadOnlineBook,
+                  ),
                 )
               : _buildLoginPrompt(),
         ],
@@ -427,6 +486,18 @@ class _HomeViewState extends State<HomeView>
                 _handleProfileTap();
               },
             ),
+            if (isLoggedIn)
+              ListTile(
+                leading: const Icon(Icons.download_rounded),
+                title: const Text("Activity Queue"),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const QueueView()),
+                  );
+                },
+              ),
             const Divider(),
             ListTile(
               leading: const Icon(Icons.settings_outlined),
@@ -473,25 +544,24 @@ class _HomeViewState extends State<HomeView>
   }
 }
 
-// --- KEEP ALIVE GRID ---
 class KeepAliveBookGrid extends StatefulWidget {
   final List<BookModel> books;
   final bool isLoading;
   final bool isLocal;
-  final Function(File)? onUploadRequest;
+  final List<BookModel>? onlineBooksReference;
+  final Function(File, String)? onUploadRequest;
   final Function(BookModel)? onDeleteRequest;
   final Function(BookModel)? onDownloadRequest;
-  final Map<int, double>? activeDownloads;
 
   const KeepAliveBookGrid({
     super.key,
     required this.books,
     required this.isLoading,
     required this.isLocal,
+    this.onlineBooksReference,
     this.onUploadRequest,
     this.onDeleteRequest,
     this.onDownloadRequest,
-    this.activeDownloads,
   });
 
   @override
@@ -503,55 +573,121 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
   @override
   bool get wantKeepAlive => true;
 
+  String _normalize(String s) =>
+      s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+  bool _isFuzzyMatch(String titleA, String titleB) {
+    final a = _normalize(titleA);
+    final b = _normalize(titleB);
+    if (a == b) return true;
+    if (a.length > 4 && b.length > 4) {
+      return a.contains(b) || b.contains(a);
+    }
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
 
-    if (widget.isLoading)
-      return const Center(child: CircularProgressIndicator());
-    if (widget.books.isEmpty) {
-      return Center(
-        child: Text(widget.isLocal ? "No downloads." : "No online books."),
-      );
-    }
+    return Stack(
+      children: [
+        if (widget.isLoading) const Center(child: CircularProgressIndicator()),
 
-    return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        // 🟢 FIX 1: Adjusted Ratio to 0.55 (Taller to prevent squishing)
-        childAspectRatio: 0.55,
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
-      ),
-      itemCount: widget.books.length,
-      itemBuilder: (context, index) {
-        final book = widget.books[index];
+        if (!widget.isLoading && widget.books.isEmpty)
+          Center(
+            child: Text(
+              widget.isLocal ? "No books found." : "No online books.",
+            ),
+          ),
 
-        double? progress;
-        int bId = int.tryParse(book.id.toString()) ?? -1;
-        if (widget.activeDownloads != null &&
-            widget.activeDownloads!.containsKey(bId)) {
-          progress = widget.activeDownloads![bId];
-        }
+        GridView.builder(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 3,
+            childAspectRatio: 0.55,
+            crossAxisSpacing: 16,
+            mainAxisSpacing: 16,
+          ),
+          itemCount: widget.books.length,
+          itemBuilder: (context, index) {
+            final book = widget.books[index];
+            double? progress;
+            bool isUpload = false;
 
-        return AnimatedBookItem(
-          book: book,
-          isLocal: widget.isLocal,
-          progress: progress,
-          onTap: () {
-            if (progress != null) return;
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => ReaderView(book: book)),
+            bool isInCloud = false;
+            if (widget.isLocal && widget.onlineBooksReference != null) {
+              isInCloud = widget.onlineBooksReference!.any(
+                (b) => _isFuzzyMatch(b.title, book.title),
+              );
+            }
+
+            if (!widget.isLocal) {
+              int bId = int.tryParse(book.id.toString()) ?? -1;
+              try {
+                // 🟢 OVERLAY FILTER: Ignore Completed tasks
+                final task = DownloadService().tasks.firstWhere(
+                  (t) =>
+                      t.bookId == bId &&
+                      t.status != DownloadStatus.failed &&
+                      t.status != DownloadStatus.canceled &&
+                      t.status != DownloadStatus.completed,
+                );
+                progress = task.progress;
+              } catch (_) {}
+            }
+            if (widget.isLocal) {
+              try {
+                // 🟢 OVERLAY FILTER: Ignore Completed tasks
+                final task = UploadService().tasks.firstWhere(
+                  (t) =>
+                      t.filePath == book.filePath &&
+                      t.status != UploadStatus.failed &&
+                      t.status != UploadStatus.canceled &&
+                      t.status != UploadStatus.completed,
+                );
+                progress = task.progress;
+                isUpload = true;
+              } catch (_) {}
+            }
+
+            return AnimatedBookItem(
+              book: book,
+              isLocal: widget.isLocal,
+              progress: progress,
+              isUploading: isUpload,
+              isInCloud: isInCloud,
+              onTap: () {
+                if (progress != null) {
+                  ScaffoldMessenger.of(context).clearSnackBars();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        isUpload
+                            ? "Uploading..."
+                            : "Downloading... Please wait.",
+                      ),
+                      duration: const Duration(seconds: 1),
+                    ),
+                  );
+                  return;
+                }
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => ReaderView(book: book)),
+                );
+              },
+              onShowMenu: (position) =>
+                  _showContextMenu(context, position, book),
             );
           },
-          onShowMenu: (position) => _showContextMenu(context, position, book),
-        );
-      },
+        ),
+      ],
     );
   }
 
+  // 🟢 FIXED CONTEXT MENU LOGIC
   Future<void> _showContextMenu(
     BuildContext context,
     Offset tapPosition,
@@ -560,6 +696,32 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
     final RenderBox overlay =
         Overlay.of(context).context.findRenderObject() as RenderBox;
 
+    bool alreadyDownloaded = LibraryService().isBookDownloaded(book.title);
+
+    // 🟢 CHECK DOWNLOAD STATUS (STRICT): Only count as "Downloading" if active/pending
+    bool isDownloading = DownloadService().tasks.any(
+      (t) =>
+          t.bookId == int.tryParse(book.id.toString()) &&
+          (t.status == DownloadStatus.downloading ||
+              t.status == DownloadStatus.pending ||
+              t.status == DownloadStatus.paused),
+    );
+
+    // 🟢 CHECK UPLOAD STATUS (STRICT): Only count as "Uploading" if active/pending
+    bool isUploading = UploadService().tasks.any(
+      (t) =>
+          t.filePath == book.filePath &&
+          (t.status == UploadStatus.uploading ||
+              t.status == UploadStatus.pending),
+    );
+
+    bool alreadyInCloud = false;
+    if (widget.isLocal && widget.onlineBooksReference != null) {
+      alreadyInCloud = widget.onlineBooksReference!.any(
+        (b) => _isFuzzyMatch(b.title, book.title),
+      );
+    }
+
     final value = await showMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
@@ -567,30 +729,80 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
         Offset.zero & overlay.size,
       ),
       items: [
-        if (widget.isLocal && widget.onUploadRequest != null)
-          const PopupMenuItem(
-            value: 'upload',
-            child: Row(
-              children: [
-                Icon(Icons.cloud_upload, color: Colors.grey),
-                SizedBox(width: 8),
-                Text("Upload"),
-              ],
+        if (widget.isLocal) ...[
+          if (isUploading)
+            const PopupMenuItem(
+              enabled: false,
+              child: Row(
+                children: [
+                  Icon(Icons.cloud_upload, color: Colors.blue),
+                  SizedBox(width: 8),
+                  Text("Uploading..."),
+                ],
+              ),
+            )
+          else if (alreadyInCloud)
+            const PopupMenuItem(
+              enabled: false,
+              child: Row(
+                children: [
+                  Icon(Icons.cloud_done, color: Colors.grey),
+                  SizedBox(width: 8),
+                  Text(
+                    "Already in Cloud",
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                ],
+              ),
+            )
+          else if (widget.onUploadRequest != null)
+            const PopupMenuItem(
+              value: 'upload',
+              child: Row(
+                children: [
+                  Icon(Icons.cloud_upload, color: Colors.blue),
+                  SizedBox(width: 8),
+                  Text("Upload"),
+                ],
+              ),
             ),
-          ),
-
-        if (!widget.isLocal && widget.onDownloadRequest != null)
-          const PopupMenuItem(
-            value: 'download',
-            child: Row(
-              children: [
-                Icon(Icons.download, color: Colors.blue),
-                SizedBox(width: 8),
-                Text("Download"),
-              ],
+        ],
+        if (!widget.isLocal) ...[
+          if (alreadyDownloaded)
+            const PopupMenuItem(
+              value: 'open',
+              child: Row(
+                children: [
+                  Icon(Icons.check_circle, color: Colors.green),
+                  SizedBox(width: 8),
+                  Text("Downloaded"),
+                ],
+              ),
+            )
+          else if (isDownloading)
+            const PopupMenuItem(
+              enabled: false,
+              value: 'queue',
+              child: Row(
+                children: [
+                  Icon(Icons.hourglass_empty, color: Colors.grey),
+                  SizedBox(width: 8),
+                  Text("Downloading..."),
+                ],
+              ),
+            )
+          else if (widget.onDownloadRequest != null)
+            const PopupMenuItem(
+              value: 'download',
+              child: Row(
+                children: [
+                  Icon(Icons.download, color: Colors.blue),
+                  SizedBox(width: 8),
+                  Text("Download"),
+                ],
+              ),
             ),
-          ),
-
+        ],
         const PopupMenuItem(
           value: 'delete',
           child: Row(
@@ -604,48 +816,55 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
       ],
     );
 
+    if (!mounted) return;
+
     if (value == 'upload' && widget.onUploadRequest != null) {
-      if (book.filePath != null) widget.onUploadRequest!(File(book.filePath!));
+      if (book.filePath != null)
+        widget.onUploadRequest!(File(book.filePath!), book.title);
     } else if (value == 'download' && widget.onDownloadRequest != null) {
       widget.onDownloadRequest!(book);
+    } else if (value == 'open') {
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Book is available in 'On Device' tab."),
+          duration: Duration(seconds: 1),
+        ),
+      );
     } else if (value == 'delete') {
-      _confirmDelete(context, book);
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text("Delete Book"),
+          content: Text("Are you sure you want to delete '${book.title}'?"),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("Cancel"),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                if (widget.onDeleteRequest != null)
+                  widget.onDeleteRequest!(book);
+              },
+              child: const Text("Delete", style: TextStyle(color: Colors.red)),
+            ),
+          ],
+        ),
+      );
     }
-  }
-
-  void _confirmDelete(BuildContext context, BookModel book) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Delete Book"),
-        content: Text("Are you sure you want to delete '${book.title}'?"),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text("Cancel"),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              if (widget.onDeleteRequest != null) {
-                widget.onDeleteRequest!(book);
-              }
-            },
-            child: const Text("Delete", style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
   }
 }
 
-// --- ANIMATED BOOK ITEM (Standardized Sizing) ---
 class AnimatedBookItem extends StatefulWidget {
   final BookModel book;
   final bool isLocal;
   final VoidCallback onTap;
   final Future<void> Function(Offset globalPosition) onShowMenu;
   final double? progress;
+  final bool isUploading;
+  final bool isInCloud;
 
   const AnimatedBookItem({
     super.key,
@@ -654,6 +873,8 @@ class AnimatedBookItem extends StatefulWidget {
     required this.onTap,
     required this.onShowMenu,
     this.progress,
+    this.isUploading = false,
+    this.isInCloud = false,
   });
 
   @override
@@ -684,55 +905,80 @@ class _AnimatedBookItemState extends State<AnimatedBookItem>
     super.dispose();
   }
 
-  // 🟢 HELPER: Creates the image widget with STRETCH fit (No clipping)
   Widget _buildCoverImage() {
-    // 🟢 CHANGED: BoxFit.fill to stretch instead of clip (User preference)
-    // If you prefer cropping, change this back to BoxFit.cover
     const BoxFit myFit = BoxFit.fill;
+    Widget? indicator;
 
+    if (!widget.isLocal &&
+        LibraryService().isBookDownloaded(widget.book.title)) {
+      indicator = Positioned(
+        top: 6,
+        right: 6,
+        child: Container(
+          padding: const EdgeInsets.all(2),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+            boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 4)],
+          ),
+          child: const Icon(Icons.check_circle, color: Colors.green, size: 18),
+        ),
+      );
+    } else if (widget.isLocal && widget.isInCloud) {
+      indicator = Positioned(
+        top: 6,
+        right: 6,
+        child: Container(
+          padding: const EdgeInsets.all(2),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+            boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 4)],
+          ),
+          child: const Icon(Icons.cloud_done, color: Colors.blue, size: 18),
+        ),
+      );
+    }
+
+    Widget image;
     if (widget.isLocal) {
       if (widget.book.coverPath != null &&
           File(widget.book.coverPath!).existsSync()) {
-        return SizedBox.expand(
-          // 🟢 Force fill parent
-          child: Image.file(
-            File(widget.book.coverPath!),
-            fit: myFit,
-            gaplessPlayback: true,
-          ),
+        image = Image.file(
+          File(widget.book.coverPath!),
+          fit: myFit,
+          gaplessPlayback: true,
         );
       } else {
-        return SizedBox.expand(
-          // 🟢 Placeholder fills same space
-          child: Container(
-            color: Colors.grey[300],
-            child: const Icon(Icons.book, size: 40, color: Colors.grey),
-          ),
+        image = Container(
+          color: Colors.grey[300],
+          child: const Icon(Icons.book, size: 40, color: Colors.grey),
         );
       }
     } else {
       if (widget.book.coverUrl != null) {
-        return SizedBox.expand(
-          // 🟢 Force fill parent
-          child: CachedNetworkImage(
-            imageUrl: widget.book.coverUrl!,
-            httpHeaders: ApiService().authHeaders,
-            fit: myFit,
-            placeholder: (c, u) => Container(color: Colors.grey[200]),
-            errorWidget: (c, u, e) =>
-                const Icon(Icons.broken_image, color: Colors.grey),
-          ),
+        image = CachedNetworkImage(
+          imageUrl: widget.book.coverUrl!,
+          httpHeaders: ApiService().authHeaders,
+          fit: myFit,
+          placeholder: (c, u) => Container(color: Colors.grey[200]),
+          errorWidget: (c, u, e) =>
+              const Icon(Icons.broken_image, color: Colors.grey),
         );
       } else {
-        return SizedBox.expand(
-          // 🟢 Placeholder fills same space
-          child: Container(
-            color: Colors.grey[300],
-            child: const Icon(Icons.cloud, size: 40, color: Colors.blue),
-          ),
+        image = Container(
+          color: Colors.grey[300],
+          child: const Icon(Icons.cloud, size: 40, color: Colors.blue),
         );
       }
     }
+
+    return Stack(
+      children: [
+        SizedBox.expand(child: image),
+        if (indicator != null) indicator,
+      ],
+    );
   }
 
   @override
@@ -766,11 +1012,10 @@ class _AnimatedBookItemState extends State<AnimatedBookItem>
                   ],
                 ),
                 clipBehavior: Clip.antiAlias,
-                // 🟢 BUILDER PATTERN
                 child: widget.progress != null
                     ? ProgressBookCover(
                         progress: widget.progress!,
-                        isUploading: widget.isLocal,
+                        isUploading: widget.isUploading,
                         imageBuilder: _buildCoverImage,
                       )
                     : _buildCoverImage(),

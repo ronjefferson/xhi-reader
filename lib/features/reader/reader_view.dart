@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:pdfrx/pdfrx.dart';
 
 import 'reader_viewmodel.dart';
 import '../../models/book_model.dart';
@@ -18,9 +19,14 @@ class ReaderView extends StatefulWidget {
 
 class _ReaderViewState extends State<ReaderView> {
   late ReaderViewModel _viewModel;
-  WebViewController? _controller;
-  Timer? _spinnerSafetyTimer;
 
+  // EPUB Controller
+  WebViewController? _webViewController;
+
+  // 🟢 PDF Controller (Native PageView Controller)
+  PageController? _pageController;
+
+  Timer? _spinnerSafetyTimer;
   bool _showControls = false;
   bool _isLoading = true;
   String? _currentUrl;
@@ -38,27 +44,53 @@ class _ReaderViewState extends State<ReaderView> {
   void dispose() {
     _spinnerSafetyTimer?.cancel();
     _viewModel.removeListener(_onViewModelUpdate);
+    _pageController?.dispose(); // 🟢 Dispose PageController
     super.dispose();
   }
 
   void _onViewModelUpdate() {
     if (mounted) {
       if (_dragValue == null) setState(() {});
-      if (_viewModel.epubUrl != null && _viewModel.epubUrl != _currentUrl) {
+
+      // EPUB URL Change
+      if (!_viewModel.isPdf &&
+          _viewModel.epubUrl != null &&
+          _viewModel.epubUrl != _currentUrl) {
         _currentUrl = _viewModel.epubUrl;
-        _loadContent(_currentUrl!);
+        _loadEpubContent(_currentUrl!);
+      }
+
+      // 🟢 PDF Jump Request (From Slider or Chapter List)
+      if (_viewModel.isPdf && _viewModel.requestJumpToPage != null) {
+        int targetPage = _viewModel.requestJumpToPage!;
+        // PageView is 0-indexed, but our pages are 1-indexed
+        if (_pageController != null && _pageController!.hasClients) {
+          _pageController!.jumpToPage(targetPage - 1);
+        }
+        _viewModel.requestJumpToPage = null;
+      }
+
+      // 🟢 Initialize PageController once PDF is ready
+      if (_viewModel.isPdf && _viewModel.isReady && _pageController == null) {
+        // Start at saved page (minus 1 for 0-index)
+        int initialPage = (_viewModel.getCurrentGlobalPage() - 1).clamp(
+          0,
+          _viewModel.totalBookPages - 1,
+        );
+        _pageController = PageController(initialPage: initialPage);
+        setState(() => _isLoading = false);
       }
     }
   }
 
-  void _loadContent(String url) {
+  // --- EPUB LOADING ---
+  void _loadEpubContent(String url) {
     _startLoading();
     final uri = Uri.parse(url);
-
     if (widget.book.isLocal) {
-      _controller?.loadRequest(uri);
+      _webViewController?.loadRequest(uri);
     } else {
-      _controller?.loadRequest(uri, headers: _getAuthHeaders());
+      _webViewController?.loadRequest(uri, headers: _getAuthHeaders());
     }
   }
 
@@ -79,15 +111,17 @@ class _ReaderViewState extends State<ReaderView> {
     };
   }
 
-  void _executeScroll(double percent) {
-    _controller?.runJavaScript(
+  void _executeEpubScroll(double percent) {
+    _webViewController?.runJavaScript(
       'if(window.scrollToPercent) window.scrollToPercent($percent);',
     );
   }
 
   void _applyTheme() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    _controller?.runJavaScript('if(window.setTheme) window.setTheme($isDark);');
+    _webViewController?.runJavaScript(
+      'if(window.setTheme) window.setTheme($isDark);',
+    );
   }
 
   @override
@@ -104,14 +138,20 @@ class _ReaderViewState extends State<ReaderView> {
       );
     }
 
-    if (_controller == null) _initWebView(bgColor);
+    if (!_viewModel.isPdf && _webViewController == null) _initWebView(bgColor);
 
     return Scaffold(
       backgroundColor: bgColor,
       body: Stack(
         children: [
-          SafeArea(child: WebViewWidget(controller: _controller!)),
+          // 🟢 READER CONTENT
+          SafeArea(
+            child: _viewModel.isPdf
+                ? _buildPdfPageView(bgColor) // 🟢 New Horizontal PageView
+                : WebViewWidget(controller: _webViewController!),
+          ),
 
+          // Loading Overlay
           if (_isLoading)
             GestureDetector(
               onTap: () => setState(() => _showControls = !_showControls),
@@ -122,7 +162,7 @@ class _ReaderViewState extends State<ReaderView> {
               ),
             ),
 
-          // Top Bar
+          // 🟢 TOP BAR
           AnimatedPositioned(
             duration: const Duration(milliseconds: 200),
             top: _showControls ? 0 : -100,
@@ -159,7 +199,7 @@ class _ReaderViewState extends State<ReaderView> {
             ),
           ),
 
-          // Bottom Bar
+          // 🟢 BOTTOM BAR
           AnimatedPositioned(
             duration: const Duration(milliseconds: 200),
             bottom: _showControls ? 0 : -160,
@@ -172,6 +212,7 @@ class _ReaderViewState extends State<ReaderView> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // Page Info
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -194,6 +235,7 @@ class _ReaderViewState extends State<ReaderView> {
                     ],
                   ),
                   const SizedBox(height: 5),
+                  // Slider
                   Row(
                     children: [
                       const Text(
@@ -215,9 +257,11 @@ class _ReaderViewState extends State<ReaderView> {
                           max: _viewModel.totalBookPages.toDouble(),
                           activeColor: isDark ? Colors.white : Colors.black87,
                           inactiveColor: Colors.grey[300],
+                          // Start Dragging
                           onChanged: _isLoading
                               ? null
                               : (val) => setState(() => _dragValue = val),
+                          // End Dragging -> Jump
                           onChangeEnd: _isLoading
                               ? null
                               : (val) {
@@ -244,8 +288,45 @@ class _ReaderViewState extends State<ReaderView> {
     );
   }
 
+  // 🟢 NEW: Horizontal PageView for PDF (One Swipe = One Page)
+  Widget _buildPdfPageView(Color bgColor) {
+    if (_pageController == null || _viewModel.pdfDoc == null) {
+      return Container(color: bgColor); // Placeholder until ready
+    }
+
+    return GestureDetector(
+      onTap: () {
+        setState(() => _showControls = !_showControls);
+      },
+      child: PageView.builder(
+        controller: _pageController,
+        itemCount: _viewModel.totalBookPages,
+        scrollDirection: Axis.horizontal,
+        physics: const PageScrollPhysics(), // 🟢 Enforces Snap-to-Page
+        onPageChanged: (index) {
+          // PageView is 0-indexed, Viewmodel is 1-indexed
+          _viewModel.onPdfPageChanged(index + 1);
+        },
+        itemBuilder: (context, index) {
+          // 🟢 Zoom Support: Wrapped in InteractiveViewer
+          return InteractiveViewer(
+            maxScale: 3.0,
+            minScale: 1.0,
+            child: PdfPageView(
+              document: _viewModel.pdfDoc!,
+              pageNumber: index + 1, // 1-based index
+              alignment: Alignment.center,
+              decoration: BoxDecoration(color: bgColor),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // --- EPUB JS INIT ---
   void _initWebView(Color bgColor) {
-    _controller = WebViewController()
+    _webViewController = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(bgColor)
       ..setUserAgent("MyBookReader/1.0")
@@ -265,10 +346,35 @@ class _ReaderViewState extends State<ReaderView> {
       );
 
     if (_viewModel.epubUrl != null) {
-      _loadContent(_viewModel.epubUrl!);
+      _loadEpubContent(_viewModel.epubUrl!);
     }
   }
 
+  void _handleJsMessage(String message) {
+    if (message == 'ready') {
+      _spinnerSafetyTimer?.cancel();
+      _applyTheme();
+      if (_viewModel.requestScrollToProgress != null) {
+        _executeEpubScroll(_viewModel.requestScrollToProgress!);
+        _viewModel.requestScrollToProgress = null;
+      }
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (mounted) setState(() => _isLoading = false);
+      });
+    } else if (message == 'toggle_controls') {
+      setState(() => _showControls = !_showControls);
+    } else if (message == 'next_chapter') {
+      _viewModel.nextChapter();
+    } else if (message == 'prev_chapter') {
+      _viewModel.previousChapter();
+    } else if (message.startsWith('progress:')) {
+      final val = double.tryParse(message.split(':')[1]) ?? 0.0;
+      if (_dragValue == null)
+        setState(() => _viewModel.updateEpubScrollProgress(val));
+    }
+  }
+
+  // ... (Keep _injectOnlineAssets exactly as is) ...
   void _injectOnlineAssets() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bgHex = isDark ? '#121212' : '#FFFFFF';
@@ -291,43 +397,30 @@ class _ReaderViewState extends State<ReaderView> {
           function post(msg) { if(window.PrintReader) window.PrintReader.postMessage(msg); }
           function getWidth() { return document.documentElement.clientWidth || window.innerWidth; }
           function getScrollWidth() { return document.body.scrollWidth; }
-
           window.setTheme = function(isDark) {
               if (isDark) { document.documentElement.classList.add('dark-mode'); document.body.classList.add('dark-mode'); }
               else { document.documentElement.classList.remove('dark-mode'); document.body.classList.remove('dark-mode'); }
           }
-
-          function setScroll(x) {
-              document.body.style.transform = 'translate3d(' + (-x) + 'px, 0, 0)';
-              window.globalScrollX = x;
-          }
+          function setScroll(x) { document.body.style.transform = 'translate3d(' + (-x) + 'px, 0, 0)'; window.globalScrollX = x; }
           window.globalScrollX = 0;
-
           function fixImages() {
               let token = window.AUTH_TOKEN || ''; 
               let baseUrl = window.API_BASE_URL || '';
               let imgs = document.getElementsByTagName('img');
-
               for(let i=0; i<imgs.length; i++) {
                 let src = imgs[i].src;
                 let originalSrc = src;
-
                 if (baseUrl && (src.includes('localhost') || src.includes('127.0.0.1'))) {
                     src = src.replace(/http:\/\/(localhost|127\.0\.0\.1)(:\d+)?/gi, baseUrl);
                 }
-
                 if (src.includes('/Images/')) src = src.replace('/Images/', '/images/');
-
-                // Just append token. User-Agent handles the Ngrok bypass.
                 if (token && !src.includes('token=')) {
                     let separator = src.includes('?') ? '&' : '?';
                     src = src + separator + 'token=' + token;
                 }
-                
                 if (src !== originalSrc) imgs[i].src = src;
               }
           }
-
           function init() {
               fixImages();
               setTimeout(fixImages, 300); 
@@ -337,7 +430,6 @@ class _ReaderViewState extends State<ReaderView> {
               else setScroll(0);
               setTimeout(function(){ post('ready'); }, 200);
           }
-
           let startX = 0; let isDragging = false; let startPage = 0; 
           window.addEventListener('touchstart', function(e) { startX = e.touches[0].clientX; isDragging = true; const w = getWidth(); const maxPage = Math.ceil((getScrollWidth() - 20) / w) - 1; let rawStart = Math.round((window.globalScrollX || 0) / w); if (rawStart > maxPage) rawStart = maxPage; if (rawStart < 0) rawStart = 0; startPage = rawStart; }, {passive: false});
           window.addEventListener('touchmove', function(e) { if (!isDragging) return; const diff = startX - e.touches[0].clientX; if (e.cancelable) e.preventDefault(); setScroll((startPage * getWidth()) + diff); }, {passive: false});
@@ -350,7 +442,7 @@ class _ReaderViewState extends State<ReaderView> {
     String cssBase64 = base64Encode(utf8.encode(rawCss));
     String jsBase64 = base64Encode(utf8.encode(rawJs));
 
-    _controller?.runJavaScript('''
+    _webViewController?.runJavaScript('''
       window.AUTH_TOKEN = "$token";
       window.API_BASE_URL = "$apiBaseUrl";
       var style = document.createElement('style');
@@ -364,48 +456,37 @@ class _ReaderViewState extends State<ReaderView> {
     ''');
   }
 
-  void _handleJsMessage(String message) {
-    if (message == 'ready') {
-      _spinnerSafetyTimer?.cancel();
-      _applyTheme();
-      if (_viewModel.requestScrollToProgress != null) {
-        _executeScroll(_viewModel.requestScrollToProgress!);
-        _viewModel.requestScrollToProgress = null;
-      }
-      Future.delayed(const Duration(milliseconds: 100), () {
-        if (mounted) setState(() => _isLoading = false);
-      });
-    } else if (message == 'toggle_controls') {
-      setState(() => _showControls = !_showControls);
-    } else if (message == 'next_chapter') {
-      _viewModel.nextChapter();
-    } else if (message == 'prev_chapter') {
-      _viewModel.previousChapter();
-    } else if (message.startsWith('progress:')) {
-      final val = double.tryParse(message.split(':')[1]) ?? 0.0;
-      if (_dragValue == null)
-        setState(() => _viewModel.updateScrollProgress(val));
-    }
-  }
-
   void _showChapterList() {
     final bgColor = Theme.of(context).scaffoldBackgroundColor;
+    final chapters = _viewModel.chapterTitles;
+
+    if (chapters.isEmpty) {
+      if (_viewModel.isPdf) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("No table of contents available.")),
+        );
+      } else {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text("No chapters found.")));
+      }
+      return;
+    }
+
     showModalBottomSheet(
       context: context,
       backgroundColor: bgColor,
-      // Optional: Nice rounded corners
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (context) {
         return ListView.separated(
-          // 🟢 ADDED PADDING HERE
           padding: const EdgeInsets.symmetric(vertical: 20),
-          itemCount: _viewModel.chapterTitles.length,
+          itemCount: chapters.length,
           separatorBuilder: (c, i) => const Divider(height: 1),
           itemBuilder: (context, index) {
             return ListTile(
-              title: Text(_viewModel.chapterTitles[index]),
+              title: Text(chapters[index]),
               onTap: () {
                 Navigator.pop(context);
                 _viewModel.jumpToChapter(index);

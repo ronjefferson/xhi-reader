@@ -48,7 +48,7 @@ dependencies:
   # To render the "Reader" (HTML/JS)
   webview_flutter: ^4.10.0
 
-  pdfrx: ^2.0.0
+  pdfrx: ^2.2.24
 
   # --- 3. Utilities ---
   # To import books from device storage
@@ -72,6 +72,8 @@ dependencies:
 
   dio: ^5.4.0
 
+  printing: ^5.11.1
+  
 dev_dependencies:
   flutter_test:
     sdk: flutter

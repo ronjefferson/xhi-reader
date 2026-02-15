@@ -22,8 +22,7 @@ class DownloadService extends ChangeNotifier {
   // --- PUBLIC ACTIONS ---
 
   void addToQueue(int bookId, String title, String coverUrl, String savePath) {
-    // 🟢 FIX: Only remove an old entry for THIS specific book (if completed/failed).
-    // Do NOT wipe the entire history of other downloads.
+    // Remove old tasks
     _tasks.removeWhere(
       (t) =>
           t.bookId == bookId &&
@@ -31,7 +30,7 @@ class DownloadService extends ChangeNotifier {
               t.status == DownloadStatus.failed),
     );
 
-    // Prevent duplicate active downloads
+    // Prevent duplicates
     if (_tasks.any(
       (t) =>
           t.bookId == bookId &&
@@ -133,6 +132,7 @@ class DownloadService extends ChangeNotifier {
 
         final response = await client.send(request);
 
+        // 🟢 FIX: 401 RETRY LOGIC (Before opening file)
         if (response.statusCode == 401 && !retryMode) {
           print("DownloadService: Token expired. Refreshing...");
           await response.stream.drain();
@@ -141,33 +141,42 @@ class DownloadService extends ChangeNotifier {
           if (success) {
             retryMode = true;
             continue;
+          } else {
+            throw "Session expired";
           }
         }
 
+        // 🟢 FIX: STRICT STATUS CHECK (Prevents Corrupt Files)
+        // If server sends 404 or 500, we must fail.
         if (response.statusCode != 200) {
           throw "Server error: ${response.statusCode}";
         }
 
+        // 🟢 FIX: SAFE WRITE
         task.totalBytes = response.contentLength ?? -1;
         task.receivedBytes = 0;
         task.progress = 0.0;
 
         final file = File(task.savePath);
-        final sink = file.openWrite();
 
+        // Ensure folder exists
+        if (!file.parent.existsSync()) {
+          file.parent.createSync(recursive: true);
+        }
+
+        final sink = file.openWrite();
         final stopwatch = Stopwatch()..start();
 
         await for (var chunk in response.stream) {
           sink.add(chunk);
           task.receivedBytes += chunk.length;
 
-          if (stopwatch.elapsedMilliseconds > 1500) {
+          if (stopwatch.elapsedMilliseconds > 500) {
             if (task.totalBytes != -1) {
               task.progress = task.receivedBytes / task.totalBytes;
             }
             notifyListeners();
             stopwatch.reset();
-            await Future.delayed(const Duration(milliseconds: 50));
           }
         }
 
@@ -184,9 +193,13 @@ class DownloadService extends ChangeNotifier {
         break;
       }
     } catch (e) {
+      print("Download Failed: $e");
       task.status = DownloadStatus.failed;
       task.errorMessage = "Download Error";
       notifyListeners();
+
+      // Cleanup corrupt file
+      _cleanupFile(task.savePath);
     } finally {
       _processQueue();
     }

@@ -65,6 +65,7 @@ class _HomeViewState extends State<HomeView>
     DownloadService().addListener(_onQueueUpdate);
     UploadService().addListener(_onQueueUpdate);
 
+    // 🟢 REFRESH LIBRARY AFTER DOWNLOAD
     DownloadService().onBookDownloaded = () {
       if (mounted) {
         _loadLocalBooks(force: true, isRefresh: true);
@@ -73,9 +74,9 @@ class _HomeViewState extends State<HomeView>
         ScaffoldMessenger.of(context).clearSnackBars();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text("Download completed!"),
+            content: Text("Download completed! Library refreshed."),
             backgroundColor: Colors.green,
-            duration: Duration(seconds: 1),
+            duration: Duration(seconds: 2),
           ),
         );
       }
@@ -191,37 +192,61 @@ class _HomeViewState extends State<HomeView>
     }
   }
 
+  // 🟢 FIXED DOWNLOAD LOGIC
   Future<void> _downloadOnlineBook(BookModel book) async {
+    // 1. Check if already exists locally
     if (LibraryService().isBookDownloaded(book.title)) {
-      ScaffoldMessenger.of(context).clearSnackBars();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Book is already downloaded.")),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).clearSnackBars();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Book is already downloaded.")),
+        );
+      }
       return;
     }
 
-    String savePath;
-    final safeTitle = book.title.replaceAll(RegExp(r'[^\w\s\.]'), '');
-    int bookId = int.parse(book.id.toString());
-
+    // 2. Request Permission (Crucial for Downloads folder)
     if (Platform.isAndroid) {
-      if (await Permission.manageExternalStorage.request().isGranted) {
-        savePath = "/storage/emulated/0/Download/$safeTitle.epub";
-      } else if (await Permission.storage.request().isGranted) {
-        savePath = "/storage/emulated/0/Download/$safeTitle.epub";
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).clearSnackBars();
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text("Permission denied.")));
+      if (!await Permission.manageExternalStorage.isGranted &&
+          !await Permission.storage.isGranted) {
+        // Try requesting
+        PermissionStatus status = await Permission.manageExternalStorage
+            .request();
+        if (!status.isGranted) {
+          status = await Permission.storage.request();
         }
-        return;
+        if (!status.isGranted) {
+          if (mounted)
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text("Permission denied. Cannot save file."),
+              ),
+            );
+          return;
+        }
       }
-    } else {
-      final dir = await getApplicationDocumentsDirectory();
-      savePath = "${dir.path}/$safeTitle.epub";
     }
+
+    // 3. Determine Correct Extension (Fixes "Can't Open" error)
+    String extension = ".epub";
+    if (book.title.toLowerCase().endsWith(".pdf") ||
+        (book.filePath != null &&
+            book.filePath!.toLowerCase().endsWith(".pdf"))) {
+      extension = ".pdf";
+    }
+
+    // 4. Generate Safe Filename
+    final safeTitle = book.title.replaceAll(RegExp(r'[^\w\s\.]'), '');
+    String filename = safeTitle;
+    if (!filename.toLowerCase().endsWith(extension)) {
+      filename = "$filename$extension";
+    }
+
+    // 5. Hardcoded Path to Downloads Folder
+    final savePath = "/storage/emulated/0/Download/$filename";
+    int bookId = int.tryParse(book.id.toString()) ?? 0;
+
+    print("Queueing download to: $savePath");
 
     DownloadService().addToQueue(
       bookId,
@@ -234,7 +259,7 @@ class _HomeViewState extends State<HomeView>
       ScaffoldMessenger.of(context).clearSnackBars();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text("Added '${book.title}' to queue"),
+          content: Text("Downloading to Downloads folder..."),
           duration: const Duration(milliseconds: 1500),
           action: SnackBarAction(
             label: "View",
@@ -626,7 +651,6 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
             if (!widget.isLocal) {
               int bId = int.tryParse(book.id.toString()) ?? -1;
               try {
-                // 🟢 OVERLAY FILTER: Ignore Completed tasks
                 final task = DownloadService().tasks.firstWhere(
                   (t) =>
                       t.bookId == bId &&
@@ -639,7 +663,6 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
             }
             if (widget.isLocal) {
               try {
-                // 🟢 OVERLAY FILTER: Ignore Completed tasks
                 final task = UploadService().tasks.firstWhere(
                   (t) =>
                       t.filePath == book.filePath &&
@@ -658,6 +681,8 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
               progress: progress,
               isUploading: isUpload,
               isInCloud: isInCloud,
+
+              // 🟢 SMART REDIRECTION LOGIC
               onTap: () {
                 if (progress != null) {
                   ScaffoldMessenger.of(context).clearSnackBars();
@@ -673,11 +698,38 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
                   );
                   return;
                 }
+
+                BookModel bookToOpen = book;
+
+                // 🟢 If in Cloud Tab, check if we have it locally first!
+                if (!widget.isLocal) {
+                  final library = LibraryService();
+                  try {
+                    // Try to find the local version of this book
+                    final localMatch = library.loadedBooks.firstWhere((local) {
+                      // Check ID match (preferred)
+                      if (local.id.toString() == book.id.toString())
+                        return true;
+                      // Check Title match (fallback)
+                      if (local.title.toLowerCase() == book.title.toLowerCase())
+                        return true;
+                      return false;
+                    });
+                    // print("Redirecting to local file: ${localMatch.filePath}");
+                    bookToOpen = localMatch; // Switch to the local copy
+                  } catch (e) {
+                    // print("Opening Cloud Stream (No local copy found)");
+                  }
+                }
+
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => ReaderView(book: book)),
+                  MaterialPageRoute(
+                    builder: (_) => ReaderView(book: bookToOpen),
+                  ),
                 );
               },
+
               onShowMenu: (position) =>
                   _showContextMenu(context, position, book),
             );
@@ -687,7 +739,6 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
     );
   }
 
-  // 🟢 FIXED CONTEXT MENU LOGIC
   Future<void> _showContextMenu(
     BuildContext context,
     Offset tapPosition,
@@ -698,7 +749,7 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
 
     bool alreadyDownloaded = LibraryService().isBookDownloaded(book.title);
 
-    // 🟢 CHECK DOWNLOAD STATUS (STRICT): Only count as "Downloading" if active/pending
+    // Check Status (Strictly active tasks only)
     bool isDownloading = DownloadService().tasks.any(
       (t) =>
           t.bookId == int.tryParse(book.id.toString()) &&
@@ -707,7 +758,6 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
               t.status == DownloadStatus.paused),
     );
 
-    // 🟢 CHECK UPLOAD STATUS (STRICT): Only count as "Uploading" if active/pending
     bool isUploading = UploadService().tasks.any(
       (t) =>
           t.filePath == book.filePath &&

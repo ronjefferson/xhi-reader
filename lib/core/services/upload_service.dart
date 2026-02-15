@@ -55,7 +55,10 @@ class UploadService extends ChangeNotifier {
   }
 
   void addToQueue(File file, {String? knownTitle}) {
-    _tasks.removeWhere((t) => t.status == UploadStatus.completed);
+    // 🟢 CLEANUP FIX: Only remove finished tasks if we are re-uploading
+    _tasks.removeWhere(
+      (t) => t.id == file.path && t.status == UploadStatus.completed,
+    );
 
     final String id = file.path;
     if (_tasks.any((t) => t.id == id)) return;
@@ -72,9 +75,7 @@ class UploadService extends ChangeNotifier {
         notifyListeners();
         return;
       }
-    }
-
-    if (knownTitle == null) {
+    } else {
       final filename = p.basenameWithoutExtension(file.path);
       if (_isDuplicate(filename)) {
         task.status = UploadStatus.failed;
@@ -105,7 +106,6 @@ class UploadService extends ChangeNotifier {
     task.status = UploadStatus.uploading;
     notifyListeners();
 
-    // RETRY LOGIC: Allow 1 retry if token expired
     bool retryMode = false;
 
     try {
@@ -114,13 +114,15 @@ class UploadService extends ChangeNotifier {
         if (!file.existsSync()) throw "File not found on device";
 
         final filenameSafe = p.basenameWithoutExtension(file.path);
+        // Note: We skip duplicate check here if we want to allow re-uploads,
+        // but keeping it safe is fine.
         if (_isDuplicate(filenameSafe))
           throw "Book already exists (Name Match)";
 
         final totalBytes = await file.length();
-        final url = Uri.parse(
-          '${ApiService.baseUrl}/books/',
-        ); // Ensure exact endpoint
+
+        // 🟢 FIX: Correct Endpoint is /books/ (POST)
+        final url = Uri.parse('${ApiService.baseUrl}/books/');
 
         final request = http.MultipartRequest('POST', url);
         request.headers.addAll(ApiService().authHeaders);
@@ -136,6 +138,7 @@ class UploadService extends ChangeNotifier {
                 bytesUploaded += data.length;
                 sink.add(data);
 
+                // 🟢 UI THROTTLE: Update every 500ms max
                 if (stopwatch.elapsedMilliseconds > 500) {
                   task.progress = bytesUploaded / totalBytes;
                   notifyListeners();
@@ -161,7 +164,7 @@ class UploadService extends ChangeNotifier {
         final streamedResponse = await request.send();
         final response = await http.Response.fromStream(streamedResponse);
 
-        // CHECK FOR 401 UNAUTHORIZED
+        // 🟢 RETRY LOGIC (401 Unauthorized)
         if (response.statusCode == 401 && !retryMode) {
           print("UploadService: Token expired. Refreshing...");
           final success = await AuthService().tryRefreshToken();
@@ -171,23 +174,28 @@ class UploadService extends ChangeNotifier {
           }
         }
 
-        // 🟢 FIX IS HERE: Accept both 200 and 201 as success
+        // 🟢 STATUS CODE FIX: Accept 200 and 201
         if (response.statusCode == 200 || response.statusCode == 201) {
           task.status = UploadStatus.completed;
           task.progress = 1.0;
           notifyListeners();
 
-          // This triggers the HomeView to refresh
           onUploadCompleted?.call();
           break; // Exit loop
         } else if (response.statusCode == 409) {
           throw "Book already exists";
         } else if (response.statusCode == 400) {
+          // Parse error detail from server if possible
+          try {
+            // If server returns {"detail": "Book already exists"}
+            if (response.body.contains("already exists")) {
+              throw "Book already exists";
+            }
+          } catch (_) {}
           throw "Invalid File or Bad Request";
         } else if (response.statusCode == 405) {
           throw "Server Error (405): Method Not Allowed";
         } else {
-          // This is where "Upload Failed: 200" was coming from
           throw "Upload Failed: ${response.statusCode}";
         }
       }

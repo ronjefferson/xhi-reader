@@ -1,18 +1,39 @@
 import 'package:flutter/material.dart';
-import 'features/home/home_view.dart';
+import 'package:provider/provider.dart';
+import 'package:pdfrx/pdfrx.dart'; // Required
+import 'package:path_provider/path_provider.dart'; // Required
+
+import './features/home/home_view.dart';
 import 'core/services/theme_service.dart';
 import 'core/services/auth_service.dart';
+import 'core/services/upload_service.dart';
+import 'core/services/download_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 1. Load Theme Preference
+  // 1. Initialize Theme
   await ThemeService().loadTheme();
 
-  // 2. Load Auth Token (for internal state, but we don't route based on it)
+  // 2. Initialize Auth
   await AuthService().init();
 
-  runApp(const MyApp());
+  // 🟢 3. CORRECT CONFIGURATION FOR PDF CACHE
+  // We assign a FUNCTION that returns the path, not the path itself.
+  Pdfrx.getCacheDirectory = () async {
+    final dir = await getApplicationCacheDirectory();
+    return dir.path;
+  };
+
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => UploadService()),
+        ChangeNotifierProvider(create: (_) => DownloadService()),
+      ],
+      child: const MyApp(),
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {
@@ -20,7 +41,6 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Listen to ThemeService changes to trigger app-wide rebuilds
     return AnimatedBuilder(
       animation: ThemeService(),
       builder: (context, _) {
@@ -55,11 +75,7 @@ class MyApp extends StatelessWidget {
             ),
           ),
 
-          // --- THEME MODE SWITCHER ---
           themeMode: ThemeService().themeMode,
-
-          // --- HOME SCREEN ---
-          // Always start at Home. The Home view handles the "Guest" vs "User" state.
           home: const HomeView(),
         );
       },

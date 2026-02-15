@@ -20,7 +20,7 @@ class LibraryService {
 
   static const String _appFolderName = "MyReaderData";
 
-  // 🟢 SINGLE SOURCE OF TRUTH
+  // Cache
   List<BookModel> _loadedBooks = [];
   List<BookModel> get loadedBooks => _loadedBooks;
 
@@ -70,7 +70,7 @@ class LibraryService {
     );
   }
 
-  // --- MAIN SCAN METHOD ---
+  // --- MAIN SCAN METHOD (Restored Logic) ---
   Future<List<BookModel>> scanForEpubs({bool forceRefresh = false}) async {
     if (!await requestPermission()) return [];
 
@@ -79,10 +79,17 @@ class LibraryService {
     List<BookModel> books = [];
 
     // 1. Scan Public Downloads
-    books.addAll(await _scanPublicDownloads(prefs, seenPaths));
+    // We pass forceRefresh here to decide if we regenerate covers
+    final publicBooks = await _scanPublicDownloads(
+      prefs,
+      seenPaths,
+      forceRefresh,
+    );
+    books.addAll(publicBooks);
 
     // 2. Scan App Documents
-    books.addAll(await _scanAppDocuments(prefs, seenPaths));
+    final privateBooks = await _scanAppDocuments(prefs, seenPaths);
+    books.addAll(privateBooks);
 
     books.sort((a, b) {
       if (b.lastRead == null) return -1;
@@ -90,40 +97,32 @@ class LibraryService {
       return b.lastRead!.compareTo(a.lastRead!);
     });
 
-    // 🟢 CRITICAL FIX: Ensure cache is updated for the Cloud Tab to see
+    // Update Cache (Crucial for Cloud Tab)
     _loadedBooks = books;
-
     return books;
   }
 
-  // 🟢 SMART CHECK: Is this online book already on device?
   bool isBookDownloaded(String onlineTitle) {
     if (_loadedBooks.isEmpty) return false;
-
     final cleanOnline = _normalize(onlineTitle);
 
     return _loadedBooks.any((localBook) {
       final cleanLocal = _normalize(localBook.title);
 
-      // 1. Exact Title Match
       if (cleanLocal == cleanOnline) return true;
 
-      // 2. Filename Match (The file might be 'harry_potter.epub' vs 'Harry Potter')
       final filename = p
           .basenameWithoutExtension(localBook.filePath ?? "")
           .toLowerCase()
           .replaceAll(RegExp(r'[^a-z0-9]'), '');
-
       if (filename.isNotEmpty && filename == cleanOnline) return true;
 
-      // 3. Fuzzy/Substring Match
       if (cleanLocal.length > 4 && cleanOnline.length > 4) {
         if (cleanLocal.contains(cleanOnline) ||
             cleanOnline.contains(cleanLocal)) {
           return true;
         }
       }
-
       return false;
     });
   }
@@ -132,10 +131,11 @@ class LibraryService {
     return input.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
   }
 
-  // --- FAST SCANNERS ---
+  // --- SCANNERS (Restored listSync logic) ---
   Future<List<BookModel>> _scanPublicDownloads(
     SharedPreferences prefs,
     Set<String> seenPaths,
+    bool forceRefresh,
   ) async {
     List<BookModel> found = [];
     try {
@@ -145,13 +145,15 @@ class LibraryService {
       final appDataDir = await _getAppDataDirectory();
 
       if (downloadsDir.existsSync()) {
-        // 🟢 RECURSIVE: Finds books in subfolders
+        // 🟢 RESTORED: listSync with recursive: true
+        // This ensures we find files in subfolders and prevents "missed" files
         List<FileSystemEntity> files = downloadsDir.listSync(recursive: true);
 
         for (var entity in files) {
-          if (entity is File &&
-              (p.extension(entity.path) == '.epub' ||
-                  p.extension(entity.path) == '.pdf')) {
+          if (entity is File) {
+            final ext = p.extension(entity.path).toLowerCase();
+            if (ext != '.epub' && ext != '.pdf') continue;
+
             if (seenPaths.contains(entity.path)) continue;
             seenPaths.add(entity.path);
 
@@ -161,7 +163,11 @@ class LibraryService {
             final bookDataDir = Directory('${appDataDir.path}/$bookId');
             final coverFile = File('${bookDataDir.path}/cover.png');
 
-            // 🟢 SMART LOGIC: Only process if absolutely necessary
+            // 🟢 SAFE OPTIMIZATION: Check timestamps
+            // Only generate if:
+            // 1. Folder missing
+            // 2. Cover missing
+            // 3. Book file is NEWER than cover file (User updated the file)
             bool needsProcessing = false;
 
             if (!await bookDataDir.exists()) {
@@ -170,7 +176,7 @@ class LibraryService {
             } else if (!await coverFile.exists()) {
               needsProcessing = true;
             } else {
-              // Time Check: Is book newer than cover?
+              // Only check timestamp if forceRefresh was requested or regular check
               try {
                 final bookStat = await entity.stat();
                 final coverStat = await coverFile.stat();
@@ -183,7 +189,7 @@ class LibraryService {
             }
 
             if (needsProcessing) {
-              if (p.extension(entity.path) == '.epub') {
+              if (ext == '.epub') {
                 await _extractEpubCover(entity, coverFile);
               } else {
                 await _generatePdfCover(entity, coverFile);
@@ -224,6 +230,7 @@ class LibraryService {
     try {
       if (!appDataDir.existsSync()) return [];
 
+      // 🟢 RESTORED: listSync for stability
       final folders = appDataDir.listSync();
 
       for (var folder in folders) {
@@ -234,9 +241,8 @@ class LibraryService {
           final folderFiles = folder.listSync();
           for (var f in folderFiles) {
             if (f is File) {
-              if (p.extension(f.path) == '.pdf' ||
-                  p.extension(f.path) == '.epub')
-                bookFile = f;
+              final ext = p.extension(f.path).toLowerCase();
+              if (ext == '.pdf' || ext == '.epub') bookFile = f;
               if (p.basename(f.path).contains('cover')) coverFile = f;
             }
           }
@@ -271,7 +277,6 @@ class LibraryService {
     return found;
   }
 
-  // --- MANUAL IMPORT ---
   Future<void> importPdf() async {
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
@@ -288,7 +293,7 @@ class LibraryService {
       if (!await bookDataDir.exists())
         await bookDataDir.create(recursive: true);
 
-      final ext = p.extension(originalFile.path);
+      final ext = p.extension(originalFile.path).toLowerCase();
       final savedFile = await originalFile.copy(
         '${bookDataDir.path}/$fileName$ext',
       );
@@ -305,11 +310,8 @@ class LibraryService {
   Future<void> _generatePdfCover(File pdfFile, File targetCoverFile) async {
     try {
       final pdfBytes = await pdfFile.readAsBytes();
-      await for (final page in Printing.raster(
-        pdfBytes,
-        dpi: 150,
-        pages: [0],
-      )) {
+      // 🟢 SAFE OPTIMIZATION: 72 DPI is enough for thumbnails and prevents crashes
+      await for (final page in Printing.raster(pdfBytes, dpi: 72, pages: [0])) {
         final pngBytes = await page.toPng();
         await targetCoverFile.writeAsBytes(pngBytes);
         break;

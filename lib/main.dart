@@ -33,8 +33,6 @@ void main() async {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  static const Color customButtonColor = Color.fromARGB(255, 175, 126, 209);
-
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -44,125 +42,111 @@ class MyApp extends StatelessWidget {
           title: 'Epub Reader',
           debugShowCheckedModeBanner: false,
 
-          // --- LIGHT THEME ---
+          // --- 🟢 LIGHT THEME (YOUR PALETTE) ---
           theme: ThemeData(
+            useMaterial3: true,
             brightness: Brightness.light,
-            primarySwatch: Colors.blue,
-            primaryColor: Colors.blue,
+            scaffoldBackgroundColor: const Color(0xFFFCF8F8),
+            primaryColor: const Color(0xFFF5AFAF),
 
             colorScheme: const ColorScheme.light(
-              primary: Colors.blue,
+              primary: Color(0xFFF5AFAF),
               onPrimary: Colors.white,
-              surface: Colors.white,
+              surface: Color(0xFFFBEFEF),
+              onSurface: Colors.black87,
             ),
 
-            scaffoldBackgroundColor: Colors.white,
-            cardColor: Colors.white,
+            cardColor: const Color(0xFFFBEFEF),
 
-            // 1. SOFT DIVIDERS (Global)
-            dividerColor: Colors.black.withOpacity(0.05),
-            dividerTheme: DividerThemeData(
-              color: Colors.black.withOpacity(0.05),
-              thickness: 1,
-              space: 1,
+            dividerColor: const Color(0xFFF9DFDF),
+            dividerTheme: const DividerThemeData(
+              color: Color(0xFFF9DFDF),
+              thickness: 0.5,
+              space: 0,
             ),
 
-            // 🟢 2. SOFT APP BAR LINE (Light)
-            appBarTheme: AppBarTheme(
-              backgroundColor: Colors.white,
-              foregroundColor: Colors.black,
-              elevation: 0, // No shadow
-              scrolledUnderElevation: 0, // No color change on scroll
-              shape: Border(
-                bottom: BorderSide(
-                  color: Colors.black.withOpacity(0.05), // Subtle Border
-                  width: 1,
-                ),
-              ),
-            ),
-
-            drawerTheme: const DrawerThemeData(
-              backgroundColor: Colors.white,
+            appBarTheme: const AppBarTheme(
+              backgroundColor: Color(0xFFFCF8F8),
+              foregroundColor: Colors.black87,
               elevation: 0,
+              scrolledUnderElevation: 0,
             ),
 
-            listTileTheme: const ListTileThemeData(
-              textColor: Colors.black,
-              iconColor: Colors.black,
-            ),
-
-            inputDecorationTheme: InputDecorationTheme(
+            inputDecorationTheme: const InputDecorationTheme(
               filled: true,
-              fillColor: Colors.grey[100],
-              hintStyle: TextStyle(color: Colors.grey[600]),
+              fillColor: Color(0xFFF9DFDF),
               border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.all(Radius.circular(12)),
                 borderSide: BorderSide.none,
               ),
             ),
 
             elevatedButtonTheme: ElevatedButtonThemeData(
               style: ElevatedButton.styleFrom(
-                backgroundColor: customButtonColor,
+                backgroundColor: const Color(0xFFF5AFAF),
                 foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
             ),
           ),
 
-          // --- DARK THEME ---
+          // --- 🟢 DARK THEME (YOUR NEW PALETTE) ---
           darkTheme: ThemeData(
+            useMaterial3: true,
             brightness: Brightness.dark,
-            primarySwatch: Colors.blue,
-            primaryColor: const Color.fromARGB(255, 79, 53, 80),
+
+            // Background: 18122B
+            scaffoldBackgroundColor: const Color(0xFF18122B),
+
+            // Primary/Accent: 635985
+            primaryColor: const Color(0xFF635985),
 
             colorScheme: const ColorScheme.dark(
-              primary: Colors.blue,
+              primary: Color(0xFF635985),
               onPrimary: Colors.white,
-              surface: Color(0xFF1B121E),
+              // Surface: 393053
+              surface: Color(0xFF393053),
+              onSurface: Colors.white70,
             ),
 
-            scaffoldBackgroundColor: const Color.fromARGB(255, 27, 18, 30),
-            cardColor: const Color.fromARGB(255, 27, 18, 30),
+            // Card Color: 393053
+            cardColor: const Color(0xFF393053),
 
-            // 1. SOFT DIVIDERS (Global)
-            dividerColor: Colors.white.withOpacity(0.1),
+            // Subtle lines using the 443C68 indigo
+            dividerColor: const Color(0xFF443C68).withOpacity(0.5),
             dividerTheme: DividerThemeData(
-              color: Colors.white.withOpacity(0.1),
-              thickness: 1,
-              space: 1,
+              color: const Color(0xFF443C68).withOpacity(0.5),
+              thickness: 0.5,
+              space: 0,
             ),
 
-            // 🟢 2. SOFT APP BAR LINE (Dark)
-            appBarTheme: AppBarTheme(
-              backgroundColor: const Color.fromARGB(255, 27, 18, 30),
+            appBarTheme: const AppBarTheme(
+              backgroundColor: Color(0xFF18122B),
               foregroundColor: Colors.white,
-              elevation: 0, // No shadow
+              elevation: 0,
               scrolledUnderElevation: 0,
-              shape: Border(
-                bottom: BorderSide(
-                  color: Colors.white.withOpacity(0.1), // Subtle Border
-                  width: 1,
-                ),
-              ),
             ),
 
             drawerTheme: const DrawerThemeData(
-              backgroundColor: Color.fromARGB(255, 27, 18, 30),
+              backgroundColor: Color(0xFF18122B),
             ),
 
-            inputDecorationTheme: InputDecorationTheme(
+            // Input Fields: 443C68
+            inputDecorationTheme: const InputDecorationTheme(
               filled: true,
-              fillColor: const Color.fromARGB(255, 42, 36, 44),
-              hintStyle: const TextStyle(color: Colors.grey),
+              fillColor: Color(0xFF443C68),
               border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.all(Radius.circular(12)),
                 borderSide: BorderSide.none,
               ),
             ),
 
             elevatedButtonTheme: ElevatedButtonThemeData(
               style: ElevatedButton.styleFrom(
-                backgroundColor: customButtonColor,
+                backgroundColor: const Color(0xFF635985),
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),

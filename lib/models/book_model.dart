@@ -30,6 +30,30 @@ class BookModel {
       coverUrl: "$baseUrl/books/${json['id']}/cover",
     );
   }
+
+  // 🟢 NEW: copyWith method
+  // This fixes the error in LibraryService by allowing us to easily update timestamps
+  BookModel copyWith({
+    String? id,
+    String? title,
+    String? author,
+    String? filePath,
+    String? coverPath,
+    String? coverUrl,
+    bool? isLocal,
+    DateTime? lastRead,
+  }) {
+    return BookModel(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      author: author ?? this.author,
+      filePath: filePath ?? this.filePath,
+      coverPath: coverPath ?? this.coverPath,
+      coverUrl: coverUrl ?? this.coverUrl,
+      isLocal: isLocal ?? this.isLocal,
+      lastRead: lastRead ?? this.lastRead,
+    );
+  }
 }
 
 enum BookType { epub, pdf }

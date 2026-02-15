@@ -62,6 +62,7 @@ class LibraryService {
     };
   }
 
+  // 🟢 NEW: Update Timestamp
   Future<void> updateLastRead(String bookId) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(
@@ -70,7 +71,29 @@ class LibraryService {
     );
   }
 
-  // --- MAIN SCAN METHOD (Restored Logic) ---
+  // 🟢 NEW: Sort Any List (Cloud or Local)
+  Future<List<BookModel>> sortBooksByRecent(List<BookModel> books) async {
+    final prefs = await SharedPreferences.getInstance();
+    List<BookModel> updatedBooks = [];
+
+    for (var book in books) {
+      final lastReadMillis = prefs.getInt('last_read_${book.id}');
+      final lastRead = lastReadMillis != null
+          ? DateTime.fromMillisecondsSinceEpoch(lastReadMillis)
+          : null;
+      updatedBooks.add(book.copyWith(lastRead: lastRead));
+    }
+
+    updatedBooks.sort((a, b) {
+      final aTime = a.lastRead ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bTime = b.lastRead ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return bTime.compareTo(aTime);
+    });
+
+    return updatedBooks;
+  }
+
+  // --- MAIN SCAN METHOD ---
   Future<List<BookModel>> scanForEpubs({bool forceRefresh = false}) async {
     if (!await requestPermission()) return [];
 
@@ -79,7 +102,6 @@ class LibraryService {
     List<BookModel> books = [];
 
     // 1. Scan Public Downloads
-    // We pass forceRefresh here to decide if we regenerate covers
     final publicBooks = await _scanPublicDownloads(
       prefs,
       seenPaths,
@@ -91,13 +113,13 @@ class LibraryService {
     final privateBooks = await _scanAppDocuments(prefs, seenPaths);
     books.addAll(privateBooks);
 
+    // Sort Local Books
     books.sort((a, b) {
       if (b.lastRead == null) return -1;
       if (a.lastRead == null) return 1;
       return b.lastRead!.compareTo(a.lastRead!);
     });
 
-    // Update Cache (Crucial for Cloud Tab)
     _loadedBooks = books;
     return books;
   }
@@ -131,7 +153,7 @@ class LibraryService {
     return input.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
   }
 
-  // --- SCANNERS (Restored listSync logic) ---
+  // --- SCANNERS ---
   Future<List<BookModel>> _scanPublicDownloads(
     SharedPreferences prefs,
     Set<String> seenPaths,
@@ -145,8 +167,6 @@ class LibraryService {
       final appDataDir = await _getAppDataDirectory();
 
       if (downloadsDir.existsSync()) {
-        // 🟢 RESTORED: listSync with recursive: true
-        // This ensures we find files in subfolders and prevents "missed" files
         List<FileSystemEntity> files = downloadsDir.listSync(recursive: true);
 
         for (var entity in files) {
@@ -163,11 +183,6 @@ class LibraryService {
             final bookDataDir = Directory('${appDataDir.path}/$bookId');
             final coverFile = File('${bookDataDir.path}/cover.png');
 
-            // 🟢 SAFE OPTIMIZATION: Check timestamps
-            // Only generate if:
-            // 1. Folder missing
-            // 2. Cover missing
-            // 3. Book file is NEWER than cover file (User updated the file)
             bool needsProcessing = false;
 
             if (!await bookDataDir.exists()) {
@@ -176,7 +191,6 @@ class LibraryService {
             } else if (!await coverFile.exists()) {
               needsProcessing = true;
             } else {
-              // Only check timestamp if forceRefresh was requested or regular check
               try {
                 final bookStat = await entity.stat();
                 final coverStat = await coverFile.stat();
@@ -230,7 +244,6 @@ class LibraryService {
     try {
       if (!appDataDir.existsSync()) return [];
 
-      // 🟢 RESTORED: listSync for stability
       final folders = appDataDir.listSync();
 
       for (var folder in folders) {
@@ -277,6 +290,7 @@ class LibraryService {
     return found;
   }
 
+  // 🟢 NEW: Import PDF Logic
   Future<void> importPdf() async {
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
@@ -310,7 +324,6 @@ class LibraryService {
   Future<void> _generatePdfCover(File pdfFile, File targetCoverFile) async {
     try {
       final pdfBytes = await pdfFile.readAsBytes();
-      // 🟢 SAFE OPTIMIZATION: 72 DPI is enough for thumbnails and prevents crashes
       await for (final page in Printing.raster(pdfBytes, dpi: 72, pages: [0])) {
         final pngBytes = await page.toPng();
         await targetCoverFile.writeAsBytes(pngBytes);

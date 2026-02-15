@@ -47,7 +47,6 @@ class _LoginViewState extends State<LoginView> {
   }
 
   void _goToRegister() async {
-    // 🟢 INSTANT TRANSITION (Duration.zero)
     final createdEmail = await Navigator.push(
       context,
       PageRouteBuilder(
@@ -79,15 +78,25 @@ class _LoginViewState extends State<LoginView> {
 
   @override
   Widget build(BuildContext context) {
-    final primaryColor = Theme.of(context).primaryColor;
+    // 🟢 Use Theme colors defined in main.dart
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    // In Light mode use Primary Color for header, in Dark mode use Background color
+    final headerBgColor = isDark
+        ? theme.scaffoldBackgroundColor
+        : theme.primaryColor;
+
+    // Links should be Blue in dark mode for visibility, Primary in light mode
+    final linkColor = isDark ? Colors.blueAccent : theme.primaryColor;
 
     return Scaffold(
-      backgroundColor: primaryColor,
+      backgroundColor: headerBgColor,
       body: SafeArea(
         bottom: false,
         child: CustomScrollView(
           slivers: [
-            // 1. HEADER SECTION
+            // 1. HEADER
             SliverToBoxAdapter(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -101,7 +110,6 @@ class _LoginViewState extends State<LoginView> {
                         size: 28,
                       ),
                       onPressed: () => Navigator.pop(context),
-                      tooltip: "Back to Library",
                     ),
                   ),
                   Padding(
@@ -139,13 +147,16 @@ class _LoginViewState extends State<LoginView> {
               ),
             ),
 
-            // 2. WHITE FORM SHEET
+            // 2. SHEET (Uses theme.cardColor)
             SliverFillRemaining(
               hasScrollBody: false,
               child: Container(
-                decoration: const BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+                decoration: BoxDecoration(
+                  color: theme
+                      .cardColor, // 🟢 Automatically Darkest in Dark Mode / White in Light
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(30),
+                  ),
                 ),
                 padding: const EdgeInsets.all(32.0),
                 child: Column(
@@ -153,78 +164,46 @@ class _LoginViewState extends State<LoginView> {
                   children: [
                     const SizedBox(height: 20),
 
+                    // USERNAME (Pickups up inputDecorationTheme from main.dart)
                     TextField(
                       controller: _usernameController,
-                      decoration: InputDecoration(
+                      decoration: const InputDecoration(
                         hintText: "Email / Username",
-                        prefixIcon: const Icon(
-                          Icons.person_outline,
-                          color: Colors.grey,
-                        ),
-                        filled: true,
-                        fillColor: Colors.grey[100],
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide.none,
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          vertical: 16,
-                        ),
+                        prefixIcon: Icon(Icons.person_outline),
                       ),
                     ),
 
                     const SizedBox(height: 20),
 
+                    // PASSWORD
                     TextField(
                       controller: _passwordController,
                       obscureText: !_isPasswordVisible,
                       decoration: InputDecoration(
                         hintText: "Password",
-                        prefixIcon: const Icon(
-                          Icons.lock_outline,
-                          color: Colors.grey,
-                        ),
+                        prefixIcon: const Icon(Icons.lock_outline),
                         suffixIcon: IconButton(
                           icon: Icon(
                             _isPasswordVisible
                                 ? Icons.visibility
                                 : Icons.visibility_off,
-                            color: Colors.grey,
                           ),
                           onPressed: () => setState(
                             () => _isPasswordVisible = !_isPasswordVisible,
                           ),
-                        ),
-                        filled: true,
-                        fillColor: Colors.grey[100],
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide.none,
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          vertical: 16,
                         ),
                       ),
                     ),
 
                     const SizedBox(height: 40),
 
+                    // BUTTON (Picks up elevatedButtonTheme from main.dart)
                     SizedBox(
                       height: 56,
                       child: ElevatedButton(
                         onPressed: _isLoading ? null : _handleLogin,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: primaryColor,
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
                         child: _isLoading
-                            ? const CircularProgressIndicator(
-                                color: Colors.white,
-                              )
+                            ? const CircularProgressIndicator()
                             : const Text(
                                 "Login",
                                 style: TextStyle(
@@ -245,11 +224,11 @@ class _LoginViewState extends State<LoginView> {
                           style: TextStyle(color: Colors.grey[600]),
                         ),
                         GestureDetector(
-                          onTap: _goToRegister, // Triggers instant switch
+                          onTap: _goToRegister,
                           child: Text(
                             "Create one",
                             style: TextStyle(
-                              color: primaryColor,
+                              color: linkColor,
                               fontWeight: FontWeight.bold,
                             ),
                           ),

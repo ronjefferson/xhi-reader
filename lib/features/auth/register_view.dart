@@ -10,7 +10,6 @@ class RegisterView extends StatefulWidget {
 
 class _RegisterViewState extends State<RegisterView> {
   final _viewModel = RegisterViewModel();
-
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
@@ -46,7 +45,6 @@ class _RegisterViewState extends State<RegisterView> {
           backgroundColor: Colors.green,
         ),
       );
-      // Pops instantly back to LoginView because of reverseTransitionDuration: Duration.zero
       Navigator.pop(context, username);
     } else if (_viewModel.errorMessage != null && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -60,20 +58,26 @@ class _RegisterViewState extends State<RegisterView> {
 
   @override
   Widget build(BuildContext context) {
-    final primaryColor = Theme.of(context).primaryColor;
+    // 🟢 Use Theme colors
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    final headerBgColor = isDark
+        ? theme.scaffoldBackgroundColor
+        : theme.primaryColor;
+    final linkColor = isDark ? Colors.blueAccent : theme.primaryColor;
 
     return Scaffold(
-      backgroundColor: primaryColor,
+      backgroundColor: headerBgColor,
       body: SafeArea(
         bottom: false,
         child: CustomScrollView(
           slivers: [
-            // 1. Header Section
+            // 1. HEADER
             SliverToBoxAdapter(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Back Button
                   Padding(
                     padding: const EdgeInsets.only(left: 16, top: 16),
                     child: IconButton(
@@ -85,8 +89,6 @@ class _RegisterViewState extends State<RegisterView> {
                       onPressed: () => Navigator.pop(context),
                     ),
                   ),
-
-                  // Title Text
                   Padding(
                     padding: const EdgeInsets.fromLTRB(32, 20, 32, 40),
                     child: Column(
@@ -122,13 +124,15 @@ class _RegisterViewState extends State<RegisterView> {
               ),
             ),
 
-            // 2. White Form Sheet
+            // 2. SHEET (Uses theme.cardColor)
             SliverFillRemaining(
               hasScrollBody: false,
               child: Container(
-                decoration: const BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+                decoration: BoxDecoration(
+                  color: theme.cardColor, // 🟢 Dynamic Color
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(30),
+                  ),
                 ),
                 padding: const EdgeInsets.all(32.0),
                 child: Form(
@@ -138,96 +142,56 @@ class _RegisterViewState extends State<RegisterView> {
                     children: [
                       const SizedBox(height: 20),
 
-                      // USERNAME FIELD
+                      // USERNAME
                       TextFormField(
                         controller: _usernameController,
-                        decoration: InputDecoration(
+                        decoration: const InputDecoration(
                           hintText: "Username",
-                          prefixIcon: const Icon(
-                            Icons.person_outline,
-                            color: Colors.grey,
-                          ),
-                          filled: true,
-                          fillColor: Colors.grey[100],
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide.none,
-                          ),
-                          contentPadding: const EdgeInsets.symmetric(
-                            vertical: 16,
-                          ),
+                          prefixIcon: Icon(Icons.person_outline),
                         ),
-                        keyboardType: TextInputType.text,
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Please enter a username';
-                          }
-                          return null;
-                        },
+                        validator: (value) =>
+                            (value == null || value.trim().isEmpty)
+                            ? 'Enter a username'
+                            : null,
                       ),
 
                       const SizedBox(height: 20),
 
-                      // PASSWORD FIELD
+                      // PASSWORD
                       TextFormField(
                         controller: _passwordController,
                         obscureText: !_isPasswordVisible,
                         decoration: InputDecoration(
                           hintText: "Password",
-                          prefixIcon: const Icon(
-                            Icons.lock_outline,
-                            color: Colors.grey,
-                          ),
+                          prefixIcon: const Icon(Icons.lock_outline),
                           suffixIcon: IconButton(
                             icon: Icon(
                               _isPasswordVisible
                                   ? Icons.visibility
                                   : Icons.visibility_off,
-                              color: Colors.grey,
                             ),
                             onPressed: () => setState(
                               () => _isPasswordVisible = !_isPasswordVisible,
                             ),
                           ),
-                          filled: true,
-                          fillColor: Colors.grey[100],
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide.none,
-                          ),
-                          contentPadding: const EdgeInsets.symmetric(
-                            vertical: 16,
-                          ),
                         ),
-                        validator: (value) {
-                          if (value == null || value.length < 6) {
-                            return 'Password must be at least 6 characters';
-                          }
-                          return null;
-                        },
+                        validator: (value) =>
+                            (value == null || value.length < 6)
+                            ? 'Min 6 characters'
+                            : null,
                       ),
 
                       const SizedBox(height: 40),
 
-                      // REGISTER BUTTON
+                      // BUTTON
                       SizedBox(
                         height: 56,
                         child: ElevatedButton(
                           onPressed: _viewModel.isLoading
                               ? null
                               : _handleRegister,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: primaryColor,
-                            foregroundColor: Colors.white,
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
                           child: _viewModel.isLoading
-                              ? const CircularProgressIndicator(
-                                  color: Colors.white,
-                                )
+                              ? const CircularProgressIndicator()
                               : const Text(
                                   "Create Account",
                                   style: TextStyle(
@@ -240,7 +204,6 @@ class _RegisterViewState extends State<RegisterView> {
 
                       const SizedBox(height: 24),
 
-                      // LOGIN LINK
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
@@ -249,12 +212,11 @@ class _RegisterViewState extends State<RegisterView> {
                             style: TextStyle(color: Colors.grey[600]),
                           ),
                           GestureDetector(
-                            onTap: () =>
-                                Navigator.pop(context), // Pops instantly
+                            onTap: () => Navigator.pop(context),
                             child: Text(
                               "Login",
                               style: TextStyle(
-                                color: primaryColor,
+                                color: linkColor,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),

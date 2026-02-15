@@ -424,22 +424,34 @@ class _HomeViewState extends State<HomeView>
   }
 
   Widget _buildDrawer(bool isLoggedIn) {
+    // 🟢 DYNAMIC COLORS
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    // Header Background: Dark Mode -> Drawer Theme BG; Light Mode -> Primary Color
+    final headerBg = isDark 
+        ? theme.drawerTheme.backgroundColor 
+        : theme.primaryColor;
+
+    // Header Text/Icon: "On Primary" color (usually White)
+    final headerContentColor = theme.colorScheme.onPrimary;
+
     return Drawer(
       child: Builder(
         builder: (context) => ListView(
           padding: EdgeInsets.zero,
           children: [
             DrawerHeader(
-              decoration: BoxDecoration(color: Theme.of(context).primaryColor),
+              decoration: BoxDecoration(color: headerBg),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   CircleAvatar(
-                    backgroundColor: Colors.white,
+                    backgroundColor: headerContentColor, 
                     child: Icon(
                       isLoggedIn ? Icons.person : Icons.person_outline,
-                      color: Colors.grey,
+                      color: headerBg, // Invert color for icon inside white circle
                     ),
                   ),
                   const SizedBox(height: 10),
@@ -447,7 +459,8 @@ class _HomeViewState extends State<HomeView>
                     isLoggedIn
                         ? (AuthService().username ?? "Cloud User")
                         : "Guest",
-                    style: const TextStyle(color: Colors.white, fontSize: 18),
+                    // 🟢 DYNAMIC TEXT COLOR
+                    style: TextStyle(color: headerContentColor, fontSize: 18),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -519,7 +532,6 @@ class KeepAliveBookGrid extends StatefulWidget {
   final Function(File, String)? onUploadRequest;
   final Function(BookModel)? onDeleteRequest;
   final Function(BookModel)? onDownloadRequest;
-  // 🟢 ADD CALLBACK
   final Function(BookModel)? onBookTap;
 
   const KeepAliveBookGrid({
@@ -631,8 +643,6 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
                   );
                   return;
                 }
-
-                // 🟢 USE CALLBACK
                 if (widget.onBookTap != null) widget.onBookTap!(book);
               },
 

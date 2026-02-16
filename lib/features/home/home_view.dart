@@ -166,28 +166,27 @@ class _HomeViewState extends State<HomeView>
     }
   }
 
-  Future<void> _pickAndUploadFile() async {
-    if (!AuthService().isLoggedIn) {
-      _showLoginNeededSnackBar();
-      return;
-    }
-    FilePickerResult? result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['epub', 'pdf'],
-    );
-    if (result != null && result.files.single.path != null) {
-      final file = File(result.files.single.path!);
-      UploadService().addToQueue(file);
-    }
-  }
+  // 🟢 FIXED: This now handles local internalization only
+  Future<void> _importLocalFile() async {
+    try {
+      // Calls the LibraryService logic to pick, copy, and generate cover
+      await LibraryService().importPdf();
 
-  void _showLoginNeededSnackBar() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text("Login to upload."),
-        action: SnackBarAction(label: "Login", onPressed: _handleProfileTap),
-      ),
-    );
+      // Refresh the local grid immediately
+      if (mounted) {
+        await _loadLocalBooks(force: false, isRefresh: true);
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("File added to local library."),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint("Import Error: $e");
+    }
   }
 
   void _showSessionExpiredDialog() {
@@ -250,7 +249,6 @@ class _HomeViewState extends State<HomeView>
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    // Direct color overrides to avoid TabBarTheme errors
     final accentColor = isDark
         ? const Color.fromARGB(255, 175, 126, 209)
         : const Color(0xFFF5AFAF);
@@ -261,20 +259,16 @@ class _HomeViewState extends State<HomeView>
         actions: [
           IconButton(
             icon: const Icon(Icons.add),
-            onPressed: _pickAndUploadFile,
+            // 🟢 REDIRECTED: Now calls the local import method
+            onPressed: _importLocalFile,
           ),
         ],
-        // 🟢 MANUAL TABBAR WITH THEME-MATCHED BORDER
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(48),
           child: Container(
             decoration: BoxDecoration(
               border: Border(
-                bottom: BorderSide(
-                  color: theme
-                      .dividerColor, // Auto-matches F9DFDF (Light) or Subtle White (Dark)
-                  width: 0.5,
-                ),
+                bottom: BorderSide(color: theme.dividerColor, width: 0.5),
               ),
             ),
             child: TabBar(
@@ -282,7 +276,6 @@ class _HomeViewState extends State<HomeView>
               labelColor: accentColor,
               unselectedLabelColor: isDark ? Colors.grey : Colors.black54,
               indicatorColor: accentColor,
-              // This removes the default thick grey divider
               dividerColor: Colors.transparent,
               tabs: const [
                 Tab(text: "On Device"),
@@ -498,6 +491,7 @@ class AnimatedBookItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 🟢 REPLACED: Removed all shadows and used white background for covers
     return GestureDetector(
       onTap: onTap,
       child: Column(
@@ -506,17 +500,33 @@ class AnimatedBookItem extends StatelessWidget {
           Expanded(
             child: Container(
               decoration: BoxDecoration(
-                color: Colors.grey[200],
+                color: Colors.white, // Blends better with PDF pages
                 borderRadius: BorderRadius.circular(8),
+                // No boxShadow list = flat look
+                border: Border.all(
+                  color: Theme.of(context).dividerColor.withOpacity(0.3),
+                  width: 0.5,
+                ),
               ),
               clipBehavior: Clip.antiAlias,
               child:
                   book.coverPath != null && File(book.coverPath!).existsSync()
-                  ? Image.file(File(book.coverPath!), fit: BoxFit.cover)
+                  ? Image.file(File(book.coverPath!), fit: BoxFit.contain)
                   : (book.coverUrl != null
                         ? CachedNetworkImage(
                             imageUrl: book.coverUrl!,
-                            fit: BoxFit.cover,
+                            fit: BoxFit.contain,
+                            placeholder: (context, url) => const Center(
+                              child: SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            ),
+                            errorWidget: (context, url, error) =>
+                                const Icon(Icons.book, size: 40),
                           )
                         : const Icon(Icons.book, size: 40)),
             ),

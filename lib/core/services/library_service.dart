@@ -79,7 +79,13 @@ class LibraryService {
       final lastRead = lastReadMillis != null
           ? DateTime.fromMillisecondsSinceEpoch(lastReadMillis)
           : null;
-      updatedBooks.add(book.copyWith(lastRead: lastRead));
+
+      // Check for virtual rename alias
+      final customTitle = prefs.getString('custom_title_${book.id}');
+
+      updatedBooks.add(
+        book.copyWith(lastRead: lastRead, title: customTitle ?? book.title),
+      );
     }
 
     updatedBooks.sort((a, b) {
@@ -111,15 +117,21 @@ class LibraryService {
     final privateBooks = await _scanAppDocuments(prefs, seenPaths);
     books.addAll(privateBooks);
 
-    // Sort Local Books
-    books.sort((a, b) {
+    // Apply Virtual Names and Final Sort
+    List<BookModel> processedBooks = [];
+    for (var b in books) {
+      final customTitle = prefs.getString('custom_title_${b.id}');
+      processedBooks.add(b.copyWith(title: customTitle ?? b.title));
+    }
+
+    processedBooks.sort((a, b) {
       if (b.lastRead == null) return -1;
       if (a.lastRead == null) return 1;
       return b.lastRead!.compareTo(a.lastRead!);
     });
 
-    _loadedBooks = books;
-    return books;
+    _loadedBooks = processedBooks;
+    return processedBooks;
   }
 
   bool isBookDownloaded(String onlineTitle) {
@@ -286,7 +298,11 @@ class LibraryService {
     return found;
   }
 
+<<<<<<< HEAD
   // --- EXPLICIT IMPORT (Handles PDF and EPUB) ---
+=======
+  // --- EXPLICIT IMPORT ---
+>>>>>>> temp-branch2
   Future<void> importPdf() async {
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
@@ -395,5 +411,32 @@ class LibraryService {
     } catch (e) {
       debugPrint("Error extracting EPUB cover: $e");
     }
+  }
+
+  // --- 🟢 NEW ADDITIONS ---
+
+  // Virtual Rename (App-only)
+  Future<void> renameBookVirtual(String bookId, String newTitle) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('custom_title_$bookId', newTitle);
+  }
+
+  // File Deletion (App Folder only)
+  Future<bool> deleteBook(BookModel book) async {
+    try {
+      if (book.filePath != null) {
+        final file = File(book.filePath!);
+        final directory = file.parent;
+        // Safety: only delete if within our app folder
+        if (directory.path.contains(_appFolderName) &&
+            await directory.exists()) {
+          await directory.delete(recursive: true);
+          return true;
+        }
+      }
+    } catch (e) {
+      debugPrint("Delete Error: $e");
+    }
+    return false;
   }
 }

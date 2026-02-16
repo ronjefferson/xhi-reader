@@ -166,29 +166,6 @@ class _HomeViewState extends State<HomeView>
     }
   }
 
-<<<<<<< HEAD
-  // 🟢 FIXED: This now handles local internalization only
-  Future<void> _importLocalFile() async {
-    try {
-      // Calls the LibraryService logic to pick, copy, and generate cover
-      await LibraryService().importPdf();
-
-      // Refresh the local grid immediately
-      if (mounted) {
-        await _loadLocalBooks(force: false, isRefresh: true);
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("File added to local library."),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
-          ),
-        );
-      }
-    } catch (e) {
-      debugPrint("Import Error: $e");
-    }
-=======
   Future<void> _handleImport() async {
     await LibraryService().importPdf();
     _loadLocalBooks(isRefresh: true);
@@ -200,7 +177,8 @@ class _HomeViewState extends State<HomeView>
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (context) => Padding(
         padding: const EdgeInsets.all(24.0),
         child: Column(
@@ -212,44 +190,55 @@ class _HomeViewState extends State<HomeView>
                   width: 60,
                   height: 90,
                   decoration: BoxDecoration(
-                      color: Colors.grey[200],
-                      borderRadius: BorderRadius.circular(4)),
+                    color: Colors.grey[200],
+                    borderRadius: BorderRadius.circular(4),
+                  ),
                   clipBehavior: Clip.antiAlias,
-                  child: isLocal && book.coverPath != null && File(book.coverPath!).existsSync()
+                  child:
+                      isLocal &&
+                          book.coverPath != null &&
+                          File(book.coverPath!).existsSync()
                       ? Image.file(File(book.coverPath!), fit: BoxFit.cover)
                       : (book.coverUrl != null
-                          ? CachedNetworkImage(
-                              imageUrl: book.coverUrl!,
-                              // 🟢 Pass Auth Token to satisfy server
-                              httpHeaders: {
-                                'Authorization': 'Bearer ${AuthService().token}',
-                                'ngrok-skip-browser-warning': 'true',
-                              },
-                              fit: BoxFit.cover,
-                            )
-                          : const Icon(Icons.book, size: 40)),
+                            ? CachedNetworkImage(
+                                imageUrl: book.coverUrl!,
+                                // 🟢 Pass Auth Token to satisfy server
+                                httpHeaders: {
+                                  'Authorization':
+                                      'Bearer ${AuthService().token}',
+                                  'ngrok-skip-browser-warning': 'true',
+                                },
+                                fit: BoxFit.cover,
+                              )
+                            : const Icon(Icons.book, size: 40)),
                 ),
                 const SizedBox(width: 16),
                 Expanded(
-                    child: Text(book.title,
-                        style: const TextStyle(
-                            fontWeight: FontWeight.bold, fontSize: 16),
-                        maxLines: 2)),
+                  child: Text(
+                    book.title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                    maxLines: 2,
+                  ),
+                ),
               ],
             ),
             const Divider(height: 32),
             if (isLocal)
               ListTile(
-                  leading: const Icon(Icons.edit_outlined),
-                  title: const Text("Rename in App"),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _showRenameDialog(book);
-                  }),
+                leading: const Icon(Icons.edit_outlined),
+                title: const Text("Rename in App"),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showRenameDialog(book);
+                },
+              ),
             ListTile(
-              leading: Icon(isLocal
-                  ? Icons.cloud_upload_outlined
-                  : Icons.download_outlined),
+              leading: Icon(
+                isLocal ? Icons.cloud_upload_outlined : Icons.download_outlined,
+              ),
               title: Text(isLocal ? "Upload to Cloud" : "Download to Device"),
               onTap: () {
                 Navigator.pop(context);
@@ -258,50 +247,61 @@ class _HomeViewState extends State<HomeView>
                 } else {
                   final savePath =
                       "/storage/emulated/0/Download/${book.title}.pdf";
-                  DownloadService().addToQueue(int.tryParse(book.id) ?? 0,
-                      book.title, book.coverUrl ?? "", savePath);
+                  DownloadService().addToQueue(
+                    int.tryParse(book.id) ?? 0,
+                    book.title,
+                    book.coverUrl ?? "",
+                    savePath,
+                  );
                 }
               },
             ),
             if (isLocal)
               ListTile(
-                  leading: const Icon(Icons.delete_outline, color: Colors.red),
-                  title:
-                      const Text("Delete", style: TextStyle(color: Colors.red)),
-                  onTap: () async {
-                    Navigator.pop(context);
-                    await LibraryService().deleteBook(book);
-                    _loadLocalBooks(isRefresh: true);
-                  }),
+                leading: const Icon(Icons.delete_outline, color: Colors.red),
+                title: const Text(
+                  "Delete",
+                  style: TextStyle(color: Colors.red),
+                ),
+                onTap: () async {
+                  Navigator.pop(context);
+                  await LibraryService().deleteBook(book);
+                  _loadLocalBooks(isRefresh: true);
+                },
+              ),
             const SizedBox(height: 16),
           ],
         ),
       ),
     );
->>>>>>> temp-branch2
   }
 
   void _showRenameDialog(BookModel book) {
     final controller = TextEditingController(text: book.title);
     showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-              title: const Text("Rename Book"),
-              content: TextField(controller: controller, autofocus: true),
-              actions: [
-                TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text("Cancel")),
-                ElevatedButton(
-                    onPressed: () async {
-                      await LibraryService()
-                          .renameBookVirtual(book.id, controller.text.trim());
-                      Navigator.pop(context);
-                      _loadLocalBooks(isRefresh: true);
-                    },
-                    child: const Text("Save")),
-              ],
-            ));
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Rename Book"),
+        content: TextField(controller: controller, autofocus: true),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              await LibraryService().renameBookVirtual(
+                book.id,
+                controller.text.trim(),
+              );
+              Navigator.pop(context);
+              _loadLocalBooks(isRefresh: true);
+            },
+            child: const Text("Save"),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showSessionExpiredDialog() {
@@ -372,29 +372,14 @@ class _HomeViewState extends State<HomeView>
       appBar: AppBar(
         title: const Text("My Library"),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.add),
-<<<<<<< HEAD
-            // 🟢 REDIRECTED: Now calls the local import method
-            onPressed: _importLocalFile,
-=======
-            onPressed: _handleImport,
->>>>>>> temp-branch2
-          ),
+          IconButton(icon: const Icon(Icons.add), onPressed: _handleImport),
         ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(48),
           child: Container(
             decoration: BoxDecoration(
               border: Border(
-<<<<<<< HEAD
                 bottom: BorderSide(color: theme.dividerColor, width: 0.5),
-=======
-                bottom: BorderSide(
-                  color: theme.dividerColor,
-                  width: 0.5,
-                ),
->>>>>>> temp-branch2
               ),
             ),
             child: TabBar(
@@ -448,7 +433,9 @@ class _HomeViewState extends State<HomeView>
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    final headerBg = isDark ? theme.drawerTheme.backgroundColor : theme.primaryColor;
+    final headerBg = isDark
+        ? theme.drawerTheme.backgroundColor
+        : theme.primaryColor;
     final headerContentColor = theme.colorScheme.onPrimary;
 
     return Drawer(
@@ -471,7 +458,9 @@ class _HomeViewState extends State<HomeView>
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    isLoggedIn ? (AuthService().username ?? "Cloud User") : "Guest",
+                    isLoggedIn
+                        ? (AuthService().username ?? "Cloud User")
+                        : "Guest",
                     style: TextStyle(color: headerContentColor, fontSize: 18),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -529,11 +518,11 @@ class _HomeViewState extends State<HomeView>
   }
 
   Widget _buildLoginPrompt() => Center(
-        child: ElevatedButton(
-          onPressed: _handleProfileTap,
-          child: const Text("Login to view Cloud Library"),
-        ),
-      );
+    child: ElevatedButton(
+      onPressed: _handleProfileTap,
+      child: const Text("Login to view Cloud Library"),
+    ),
+  );
 }
 
 class KeepAliveBookGrid extends StatefulWidget {
@@ -595,7 +584,8 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
                 if (widget.onBookTap != null) widget.onBookTap!(book);
               },
               onLongPress: () {
-                if (widget.onBookLongPress != null) widget.onBookLongPress!(book);
+                if (widget.onBookLongPress != null)
+                  widget.onBookLongPress!(book);
               },
             );
           },
@@ -621,7 +611,6 @@ class AnimatedBookItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 🟢 REPLACED: Removed all shadows and used white background for covers
     return GestureDetector(
       onTap: onTap,
       onLongPress: onLongPress,
@@ -631,36 +620,12 @@ class AnimatedBookItem extends StatelessWidget {
           Expanded(
             child: Container(
               decoration: BoxDecoration(
-                color: Colors.white, // Blends better with PDF pages
+                color: Colors.grey[200],
                 borderRadius: BorderRadius.circular(8),
-                // No boxShadow list = flat look
-                border: Border.all(
-                  color: Theme.of(context).dividerColor.withOpacity(0.3),
-                  width: 0.5,
-                ),
               ),
               clipBehavior: Clip.antiAlias,
-<<<<<<< HEAD
               child:
                   book.coverPath != null && File(book.coverPath!).existsSync()
-                  ? Image.file(File(book.coverPath!), fit: BoxFit.contain)
-                  : (book.coverUrl != null
-                        ? CachedNetworkImage(
-                            imageUrl: book.coverUrl!,
-                            fit: BoxFit.contain,
-                            placeholder: (context, url) => const Center(
-                              child: SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              ),
-                            ),
-                            errorWidget: (context, url, error) =>
-                                const Icon(Icons.book, size: 40),
-=======
-              child: book.coverPath != null && File(book.coverPath!).existsSync()
                   ? Image.file(File(book.coverPath!), fit: BoxFit.cover)
                   : (book.coverUrl != null
                         ? CachedNetworkImage(
@@ -671,8 +636,8 @@ class AnimatedBookItem extends StatelessWidget {
                               'ngrok-skip-browser-warning': 'true',
                             },
                             fit: BoxFit.cover,
-                            errorWidget: (context, url, error) => const Icon(Icons.book, size: 40),
->>>>>>> temp-branch2
+                            errorWidget: (context, url, error) =>
+                                const Icon(Icons.book, size: 40),
                           )
                         : const Icon(Icons.book, size: 40)),
             ),

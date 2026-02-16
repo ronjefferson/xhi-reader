@@ -62,6 +62,7 @@ class LibraryService {
     };
   }
 
+  // 🟢 NEW: Update Timestamp
   Future<void> updateLastRead(String bookId) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(
@@ -70,6 +71,7 @@ class LibraryService {
     );
   }
 
+  // 🟢 NEW: Sort Any List (Cloud or Local)
   Future<List<BookModel>> sortBooksByRecent(List<BookModel> books) async {
     final prefs = await SharedPreferences.getInstance();
     List<BookModel> updatedBooks = [];
@@ -105,7 +107,7 @@ class LibraryService {
     final Set<String> seenPaths = {};
     List<BookModel> books = [];
 
-    // 1. Scan Public Downloads (Restriction applied here)
+    // 1. Scan Public Downloads
     final publicBooks = await _scanPublicDownloads(
       prefs,
       seenPaths,
@@ -113,7 +115,7 @@ class LibraryService {
     );
     books.addAll(publicBooks);
 
-    // 2. Scan App Documents (Internalized PDFs/EPUBs)
+    // 2. Scan App Documents
     final privateBooks = await _scanAppDocuments(prefs, seenPaths);
     books.addAll(privateBooks);
 
@@ -182,9 +184,7 @@ class LibraryService {
         for (var entity in files) {
           if (entity is File) {
             final ext = p.extension(entity.path).toLowerCase();
-
-            // 🟢 RESTRICTION: Only scan for EPUBs automatically in public folders
-            if (ext != '.epub') continue;
+            if (ext != '.epub' && ext != '.pdf') continue;
 
             if (seenPaths.contains(entity.path)) continue;
             seenPaths.add(entity.path);
@@ -215,7 +215,11 @@ class LibraryService {
             }
 
             if (needsProcessing) {
-              await _extractEpubCover(entity, coverFile);
+              if (ext == '.epub') {
+                await _extractEpubCover(entity, coverFile);
+              } else {
+                await _generatePdfCover(entity, coverFile);
+              }
             }
 
             final lastReadMillis = prefs.getInt('last_read_$bookId');
@@ -298,11 +302,7 @@ class LibraryService {
     return found;
   }
 
-<<<<<<< HEAD
-  // --- EXPLICIT IMPORT (Handles PDF and EPUB) ---
-=======
   // --- EXPLICIT IMPORT ---
->>>>>>> temp-branch2
   Future<void> importPdf() async {
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,

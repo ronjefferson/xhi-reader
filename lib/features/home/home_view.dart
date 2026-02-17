@@ -1,15 +1,12 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../models/book_model.dart';
-import '../../models/download_task.dart';
-import '../../models/upload_task.dart';
 import '../../core/services/library_service.dart';
 import '../../core/services/auth_service.dart';
 import '../../core/services/api_service.dart';
@@ -19,8 +16,8 @@ import '../../core/services/upload_service.dart';
 import '../reader/reader_view.dart';
 import '../settings/settings_view.dart';
 import '../auth/login_view.dart';
-import 'widgets/progress_book_cover.dart';
 import 'queue_view.dart';
+import './widgets/progress_book_cover.dart';
 
 class HomeView extends StatefulWidget {
   const HomeView({super.key});
@@ -32,7 +29,6 @@ class HomeView extends StatefulWidget {
 class _HomeViewState extends State<HomeView>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  StreamSubscription? _sessionSub;
 
   List<BookModel> localBooks = [];
   List<BookModel> onlineBooks = [];
@@ -50,87 +46,26 @@ class _HomeViewState extends State<HomeView>
       _loadOnlineBooks();
     }
 
-    _sessionSub = AuthService().sessionExpiredStream.listen((expired) {
-      if (expired && mounted) _showSessionExpiredDialog();
+    DownloadService().addListener(() {
+      if (mounted) setState(() {});
     });
-
-    _tabController.addListener(() {
-      if (_tabController.index == 1 &&
-          AuthService().isLoggedIn &&
-          onlineBooks.isEmpty) {
-        _loadOnlineBooks();
-      }
+    UploadService().addListener(() {
+      if (mounted) setState(() {});
     });
-
-    DownloadService().addListener(_onQueueUpdate);
-    UploadService().addListener(_onQueueUpdate);
 
     DownloadService().onBookDownloaded = () {
       if (mounted) {
         _loadLocalBooks(force: true, isRefresh: true);
-        if (AuthService().isLoggedIn) _loadOnlineBooks(silent: true);
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Download completed!"),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 1),
-          ),
-        );
+        setState(() {});
       }
     };
 
-    UploadService().onUploadCompleted = () async {
+    UploadService().onUploadCompleted = () {
       if (mounted) {
-        await Future.delayed(const Duration(seconds: 1));
-        if (!mounted) return;
-
-        await _loadOnlineBooks(silent: true);
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Cloud sync complete."),
-            backgroundColor: Colors.blue,
-            duration: Duration(seconds: 2),
-          ),
-        );
+        _loadOnlineBooks(silent: true);
+        setState(() {});
       }
     };
-  }
-
-  @override
-  void dispose() {
-    _sessionSub?.cancel();
-    _tabController.dispose();
-    DownloadService().removeListener(_onQueueUpdate);
-    UploadService().removeListener(_onQueueUpdate);
-    super.dispose();
-  }
-
-  void _onQueueUpdate() {
-    if (mounted) setState(() {});
-  }
-
-  void _openBook(BookModel book, bool isLocal) async {
-    await LibraryService().updateLastRead(book.id);
-
-    BookModel toOpen = book;
-    if (!isLocal) {
-      try {
-        toOpen = localBooks.firstWhere(
-          (l) => l.id == book.id || l.title == book.title,
-        );
-      } catch (_) {}
-    }
-
-    if (!mounted) return;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => ReaderView(book: toOpen)),
-    );
-
-    _loadLocalBooks(force: true, isRefresh: true);
-    if (AuthService().isLoggedIn) _loadOnlineBooks(silent: true);
   }
 
   Future<void> _loadLocalBooks({
@@ -139,11 +74,12 @@ class _HomeViewState extends State<HomeView>
   }) async {
     if (!isRefresh) setState(() => isLoadingLocal = true);
     final loaded = await LibraryService().scanForEpubs(forceRefresh: force);
-    if (mounted)
+    if (mounted) {
       setState(() {
         localBooks = loaded;
         isLoadingLocal = false;
       });
+    }
   }
 
   Future<void> _loadOnlineBooks({
@@ -153,11 +89,13 @@ class _HomeViewState extends State<HomeView>
     if (!silent && !isRefresh) setState(() => isLoadingOnline = true);
     try {
       final loaded = await ApiService().fetchUserBooks();
-      final sorted = await LibraryService().sortBooksByRecent(loaded);
+
+      // 🟢 Sort cloud books by recency (last read)
+      final sortedBooks = await LibraryService().sortBooksByRecent(loaded);
 
       if (mounted) {
         setState(() {
-          onlineBooks = sorted;
+          onlineBooks = sortedBooks;
           isLoadingOnline = false;
         });
       }
@@ -171,11 +109,56 @@ class _HomeViewState extends State<HomeView>
     _loadLocalBooks(isRefresh: true);
   }
 
-  // 🟢 CONTEXT MENU MODAL
+  String _getOriginalFilename(BookModel book) {
+    if (book.filePath != null && book.filePath!.isNotEmpty) {
+      return book.id;
+    } else {
+      return book.title;
+    }
+  }
+
+  String _normalizeTitle(String title) {
+    var text = title.toLowerCase();
+    text = text.replaceAll('.pdf', '').replaceAll('.epub', '');
+    return text.replaceAll(RegExp(r'[^a-z0-9]'), '');
+  }
+
+  void _openBook(BookModel book, bool isLocal) {
+    if (isLocal) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => ReaderView(book: book)),
+      ).then((_) {
+        // 🟢 Re-sort local books when returning from reader
+        _loadLocalBooks(isRefresh: true);
+      });
+      LibraryService().updateLastRead(book.id);
+    } else {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => ReaderView(book: book)),
+      ).then((_) {
+        // 🟢 Re-sort cloud books when returning from reader
+        _loadOnlineBooks(silent: true);
+      });
+      LibraryService().updateLastRead(book.id);
+    }
+  }
+
+  bool _isBookSynced(BookModel book, bool isLocal) {
+    final otherList = isLocal ? onlineBooks : localBooks;
+    final normalizedFilename = _normalizeTitle(_getOriginalFilename(book));
+
+    return otherList.any(
+      (b) => _normalizeTitle(_getOriginalFilename(b)) == normalizedFilename,
+    );
+  }
+
   void _showBookActions(BookModel book, bool isLocal) {
+    final isSynced = _isBookSynced(book, isLocal);
+
     showModalBottomSheet(
       context: context,
-      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -190,27 +173,11 @@ class _HomeViewState extends State<HomeView>
                   width: 60,
                   height: 90,
                   decoration: BoxDecoration(
-                    color: Colors.grey[200],
+                    color: Colors.white, // 🟢 White background
                     borderRadius: BorderRadius.circular(4),
                   ),
                   clipBehavior: Clip.antiAlias,
-                  child:
-                      isLocal &&
-                          book.coverPath != null &&
-                          File(book.coverPath!).existsSync()
-                      ? Image.file(File(book.coverPath!), fit: BoxFit.cover)
-                      : (book.coverUrl != null
-                            ? CachedNetworkImage(
-                                imageUrl: book.coverUrl!,
-                                // 🟢 Pass Auth Token to satisfy server
-                                httpHeaders: {
-                                  'Authorization':
-                                      'Bearer ${AuthService().token}',
-                                  'ngrok-skip-browser-warning': 'true',
-                                },
-                                fit: BoxFit.cover,
-                              )
-                            : const Icon(Icons.book, size: 40)),
+                  child: _buildBookCover(book),
                 ),
                 const SizedBox(width: 16),
                 Expanded(
@@ -226,50 +193,131 @@ class _HomeViewState extends State<HomeView>
               ],
             ),
             const Divider(height: 32),
+
             if (isLocal)
               ListTile(
-                leading: const Icon(Icons.edit_outlined),
-                title: const Text("Rename in App"),
+                leading: const Icon(Icons.edit),
+                title: const Text("Rename"),
                 onTap: () {
                   Navigator.pop(context);
                   _showRenameDialog(book);
                 },
               ),
+
             ListTile(
               leading: Icon(
-                isLocal ? Icons.cloud_upload_outlined : Icons.download_outlined,
+                isLocal
+                    ? (isSynced ? Icons.cloud_done : Icons.cloud_upload)
+                    : (isSynced ? Icons.check_circle : Icons.download),
               ),
-              title: Text(isLocal ? "Upload to Cloud" : "Download to Device"),
-              onTap: () {
+              title: Text(
+                isLocal
+                    ? (isSynced ? "Already in Cloud" : "Upload to Cloud")
+                    : (isSynced ? "Already Downloaded" : "Download"),
+              ),
+              enabled: !isSynced,
+              onTap: isSynced
+                  ? null
+                  : () {
+                      Navigator.pop(context);
+                      if (isLocal) {
+                        UploadService().addToQueue(File(book.filePath!));
+                      } else {
+                        final ext = book.title.toLowerCase().endsWith('.epub')
+                            ? '.epub'
+                            : '.pdf';
+                        final baseTitle = book.title
+                            .replaceAll(
+                              RegExp(r'\.(pdf|epub)$', caseSensitive: false),
+                              '',
+                            )
+                            .replaceAll(RegExp(r'[/\\:*?"<>|]'), '_');
+                        final savePath =
+                            "/storage/emulated/0/Download/$baseTitle$ext";
+                        DownloadService().addToQueue(
+                          int.tryParse(book.id) ?? 0,
+                          book.title,
+                          book.coverUrl ?? "",
+                          savePath,
+                        );
+                      }
+                    },
+            ),
+
+            // Delete option
+            ListTile(
+              leading: const Icon(Icons.delete, color: Colors.red),
+              title: const Text("Delete"),
+              onTap: () async {
                 Navigator.pop(context);
                 if (isLocal) {
-                  UploadService().addToQueue(File(book.filePath!));
+                  // Delete local book
+                  await LibraryService().deleteBook(book);
+                  _loadLocalBooks(isRefresh: true);
                 } else {
-                  final savePath =
-                      "/storage/emulated/0/Download/${book.title}.pdf";
-                  DownloadService().addToQueue(
-                    int.tryParse(book.id) ?? 0,
-                    book.title,
-                    book.coverUrl ?? "",
-                    savePath,
+                  // Delete cloud book
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text("Delete from Cloud"),
+                      content: Text(
+                        "Are you sure you want to delete \"${book.title}\" from the cloud? This cannot be undone.",
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, false),
+                          child: const Text("Cancel"),
+                        ),
+                        ElevatedButton(
+                          onPressed: () => Navigator.pop(context, true),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red,
+                          ),
+                          child: const Text("Delete"),
+                        ),
+                      ],
+                    ),
                   );
+
+                  if (confirmed == true) {
+                    try {
+                      final success = await ApiService().deleteBook(
+                        int.parse(book.id),
+                      );
+
+                      if (success) {
+                        _loadOnlineBooks(silent: true);
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text("Book deleted from cloud"),
+                            ),
+                          );
+                        }
+                      } else {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text("Failed to delete book"),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                        }
+                      }
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text("Error: $e"),
+                            backgroundColor: Colors.red,
+                          ),
+                        );
+                      }
+                    }
+                  }
                 }
               },
             ),
-            if (isLocal)
-              ListTile(
-                leading: const Icon(Icons.delete_outline, color: Colors.red),
-                title: const Text(
-                  "Delete",
-                  style: TextStyle(color: Colors.red),
-                ),
-                onTap: () async {
-                  Navigator.pop(context);
-                  await LibraryService().deleteBook(book);
-                  _loadLocalBooks(isRefresh: true);
-                },
-              ),
-            const SizedBox(height: 16),
           ],
         ),
       ),
@@ -282,48 +330,47 @@ class _HomeViewState extends State<HomeView>
       context: context,
       builder: (context) => AlertDialog(
         title: const Text("Rename Book"),
-        content: TextField(controller: controller, autofocus: true),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: TextField(
+            controller: controller,
+            decoration: InputDecoration(
+              hintText: "Enter a nickname for this book",
+              border: const OutlineInputBorder(),
+              suffixIcon: IconButton(
+                icon: const Icon(Icons.clear),
+                onPressed: () => controller.clear(),
+                tooltip: "Clear",
+              ),
+            ),
+            maxLines: null,
+            minLines: 2,
+          ),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text("Cancel"),
           ),
+          TextButton(
+            onPressed: () async {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.remove('custom_title_${book.id}');
+              Navigator.pop(context);
+              _loadLocalBooks(isRefresh: true);
+            },
+            child: const Text("Revert to Original"),
+          ),
           ElevatedButton(
             onPressed: () async {
-              await LibraryService().renameBookVirtual(
-                book.id,
-                controller.text.trim(),
-              );
+              final newTitle = controller.text.trim();
+              if (newTitle.isNotEmpty) {
+                await LibraryService().renameBookVirtual(book.id, newTitle);
+              }
               Navigator.pop(context);
               _loadLocalBooks(isRefresh: true);
             },
             child: const Text("Save"),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showSessionExpiredDialog() {
-    setState(() => onlineBooks.clear());
-    _tabController.animateTo(0);
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: const Text("Session Expired"),
-        content: const Text("Please log in again."),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Later"),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _handleProfileTap();
-            },
-            child: const Text("Log In"),
           ),
         ],
       ),
@@ -351,24 +398,66 @@ class _HomeViewState extends State<HomeView>
   void _handleLogout() async {
     Navigator.pop(context);
     await AuthService().logout();
-    setState(() => onlineBooks.clear());
+    setState(() {
+      onlineBooks.clear();
+    });
     _tabController.animateTo(0);
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text("Logged out successfully")));
   }
 
+  Widget _buildBookCover(BookModel book) {
+    Widget coverWidget;
+
+    if (book.coverPath != null && File(book.coverPath!).existsSync()) {
+      coverWidget = Image.file(File(book.coverPath!), fit: BoxFit.cover);
+    } else if (book.coverUrl != null) {
+      coverWidget = CachedNetworkImage(
+        imageUrl: book.coverUrl!,
+        httpHeaders: {
+          'Authorization': 'Bearer ${AuthService().token}',
+          'ngrok-skip-browser-warning': 'true',
+        },
+        fit: BoxFit.cover,
+        placeholder: (context, url) => Container(
+          color: Colors.white,
+          child: const Center(
+            child: Icon(Icons.book, size: 48, color: Colors.grey),
+          ),
+        ),
+        errorWidget: (_, __, ___) => Container(
+          color: Colors.white,
+          child: const Center(
+            child: Icon(Icons.book, size: 48, color: Colors.grey),
+          ),
+        ),
+      );
+    } else {
+      coverWidget = Container(
+        color: Colors.white,
+        child: const Center(
+          child: Icon(Icons.book, size: 48, color: Colors.grey),
+        ),
+      );
+    }
+
+    return SizedBox(
+      width: double.infinity,
+      height: double.infinity,
+      child: coverWidget,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final isLoggedIn = AuthService().isLoggedIn;
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-
-    final accentColor = isDark
+    final accentColor = theme.brightness == Brightness.dark
         ? const Color.fromARGB(255, 175, 126, 209)
         : const Color(0xFFF5AFAF);
 
     return Scaffold(
+      drawer: _buildDrawer(),
       appBar: AppBar(
         title: const Text("My Library"),
         actions: [
@@ -385,7 +474,6 @@ class _HomeViewState extends State<HomeView>
             child: TabBar(
               controller: _tabController,
               labelColor: accentColor,
-              unselectedLabelColor: isDark ? Colors.grey : Colors.black54,
               indicatorColor: accentColor,
               dividerColor: Colors.transparent,
               tabs: const [
@@ -396,7 +484,6 @@ class _HomeViewState extends State<HomeView>
           ),
         ),
       ),
-      drawer: _buildDrawer(isLoggedIn),
       body: TabBarView(
         controller: _tabController,
         children: [
@@ -405,21 +492,22 @@ class _HomeViewState extends State<HomeView>
                 _loadLocalBooks(force: true, isRefresh: true),
             child: KeepAliveBookGrid(
               books: localBooks,
+              others: onlineBooks,
               isLoading: isLoadingLocal,
               isLocal: true,
-              onlineBooksReference: onlineBooks,
-              onBookTap: (b) => _openBook(b, true),
+              onTap: (b) => _openBook(b, true),
               onBookLongPress: (b) => _showBookActions(b, true),
             ),
           ),
-          isLoggedIn
+          AuthService().isLoggedIn
               ? RefreshIndicator(
                   onRefresh: () async => _loadOnlineBooks(isRefresh: true),
                   child: KeepAliveBookGrid(
                     books: onlineBooks,
+                    others: localBooks,
                     isLoading: isLoadingOnline,
                     isLocal: false,
-                    onBookTap: (b) => _openBook(b, false),
+                    onTap: (b) => _openBook(b, false),
                     onBookLongPress: (b) => _showBookActions(b, false),
                   ),
                 )
@@ -429,90 +517,74 @@ class _HomeViewState extends State<HomeView>
     );
   }
 
-  Widget _buildDrawer(bool isLoggedIn) {
+  Widget _buildDrawer() {
+    final isLoggedIn = AuthService().isLoggedIn;
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-
-    final headerBg = isDark
+    final headerBg = theme.brightness == Brightness.dark
         ? theme.drawerTheme.backgroundColor
         : theme.primaryColor;
-    final headerContentColor = theme.colorScheme.onPrimary;
 
     return Drawer(
-      child: Builder(
-        builder: (context) => ListView(
-          padding: EdgeInsets.zero,
-          children: [
-            DrawerHeader(
-              decoration: BoxDecoration(color: headerBg),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  CircleAvatar(
-                    backgroundColor: headerContentColor,
-                    child: Icon(
-                      isLoggedIn ? Icons.person : Icons.person_outline,
-                      color: headerBg,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    isLoggedIn
-                        ? (AuthService().username ?? "Cloud User")
-                        : "Guest",
-                    style: TextStyle(color: headerContentColor, fontSize: 18),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
+      child: ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          DrawerHeader(
+            decoration: BoxDecoration(color: headerBg),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                const CircleAvatar(
+                  backgroundColor: Colors.white,
+                  child: Icon(Icons.person, color: Colors.grey),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  isLoggedIn ? (AuthService().username ?? "User") : "Guest",
+                  style: const TextStyle(color: Colors.white, fontSize: 18),
+                ),
+              ],
             ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.login),
+            title: Text(isLoggedIn ? "Profile" : "Login"),
+            onTap: () {
+              Navigator.pop(context);
+              _handleProfileTap();
+            },
+          ),
+          if (isLoggedIn)
             ListTile(
-              leading: Icon(isLoggedIn ? Icons.person : Icons.login),
-              title: Text(isLoggedIn ? "Profile" : "Login"),
-              onTap: () {
-                Navigator.pop(context);
-                _handleProfileTap();
-              },
-            ),
-            if (isLoggedIn)
-              ListTile(
-                leading: const Icon(Icons.download_rounded),
-                title: const Text("Activity Queue"),
-                onTap: () {
-                  Navigator.pop(context);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => const QueueView()),
-                  );
-                },
-              ),
-            const Divider(),
-            ListTile(
-              leading: const Icon(Icons.settings_outlined),
-              title: const Text("Settings"),
+              leading: const Icon(Icons.download),
+              title: const Text("Queue"),
               onTap: () {
                 Navigator.pop(context);
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => const SettingsView()),
+                  MaterialPageRoute(builder: (_) => const QueueView()),
                 );
               },
             ),
-            if (isLoggedIn) ...[
-              const Divider(),
-              ListTile(
-                leading: const Icon(Icons.logout, color: Colors.red),
-                title: const Text(
-                  "Logout",
-                  style: TextStyle(color: Colors.red),
-                ),
-                onTap: _handleLogout,
-              ),
-            ],
-          ],
-        ),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.settings),
+            title: const Text("Settings"),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SettingsView()),
+              );
+            },
+          ),
+          if (isLoggedIn)
+            ListTile(
+              leading: const Icon(Icons.logout, color: Colors.red),
+              title: const Text("Logout", style: TextStyle(color: Colors.red)),
+              onTap: _handleLogout,
+            ),
+        ],
       ),
     );
   }
@@ -520,27 +592,27 @@ class _HomeViewState extends State<HomeView>
   Widget _buildLoginPrompt() => Center(
     child: ElevatedButton(
       onPressed: _handleProfileTap,
-      child: const Text("Login to view Cloud Library"),
+      child: const Text("Login to view cloud"),
     ),
   );
 }
 
 class KeepAliveBookGrid extends StatefulWidget {
   final List<BookModel> books;
+  final List<BookModel> others;
   final bool isLoading;
   final bool isLocal;
-  final List<BookModel>? onlineBooksReference;
-  final Function(BookModel)? onBookTap;
-  final Function(BookModel)? onBookLongPress;
+  final Function(BookModel) onTap;
+  final Function(BookModel) onBookLongPress;
 
   const KeepAliveBookGrid({
     super.key,
     required this.books,
+    required this.others,
     required this.isLoading,
     required this.isLocal,
-    this.onlineBooksReference,
-    this.onBookTap,
-    this.onBookLongPress,
+    required this.onTap,
+    required this.onBookLongPress,
   });
 
   @override
@@ -552,105 +624,274 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
   @override
   bool get wantKeepAlive => true;
 
+  // Track books whose progress overlay should be hidden
+  final Set<String> _hiddenOverlays = {};
+
+  // 🟢 FIX: Cache progress values to prevent flickering
+  final Map<String, double> _progressCache = {};
+  final Map<String, bool> _completionScheduled = {};
+
+  String _getOriginalFilename(BookModel book) {
+    if (book.filePath != null && book.filePath!.isNotEmpty) {
+      return book.id;
+    } else {
+      return book.title;
+    }
+  }
+
+  String _normalizeTitle(String title) {
+    var text = title.toLowerCase();
+    text = text.replaceAll('.pdf', '').replaceAll('.epub', '');
+    return text.replaceAll(RegExp(r'[^a-z0-9]'), '');
+  }
+
+  // 🟢 FIXED: Check upload progress without flickering
+  double _getUploadProgress(BookModel book) {
+    final bookKey = book.id;
+
+    if (_hiddenOverlays.contains(bookKey)) {
+      return -1.0;
+    }
+
+    final tasks = UploadService().tasks;
+    try {
+      final task = tasks.firstWhere((t) => t.filePath == book.filePath);
+      final currentProgress = task.progress;
+
+      // 🟢 Update cache with actual progress
+      _progressCache[bookKey] = currentProgress;
+
+      // Schedule hiding after completion (only once)
+      if (currentProgress >= 1.0 &&
+          !_hiddenOverlays.contains(bookKey) &&
+          !_completionScheduled.containsKey(bookKey)) {
+        _completionScheduled[bookKey] = true;
+        Future.delayed(const Duration(seconds: 1), () {
+          if (mounted) {
+            setState(() {
+              _hiddenOverlays.add(bookKey);
+              _progressCache.remove(bookKey);
+              _completionScheduled.remove(bookKey);
+            });
+          }
+        });
+      }
+
+      return currentProgress;
+    } catch (e) {
+      // 🟢 FIX: Return cached progress if task not found (prevents flicker)
+      if (_progressCache.containsKey(bookKey)) {
+        final cachedProgress = _progressCache[bookKey]!;
+        // Only return cache if it's in progress (not at 0 or 1)
+        if (cachedProgress > 0.0 && cachedProgress < 1.0) {
+          return cachedProgress;
+        }
+      }
+      _progressCache.remove(bookKey);
+      return -1.0; // Not uploading
+    }
+  }
+
+  // 🟢 FIXED: Check download progress without flickering
+  double _getDownloadProgress(BookModel book) {
+    final bookKey = book.id;
+
+    if (_hiddenOverlays.contains(bookKey)) {
+      return -1.0;
+    }
+
+    final tasks = DownloadService().tasks;
+    try {
+      final normalizedTitle = _normalizeTitle(_getOriginalFilename(book));
+      final task = tasks.firstWhere((t) {
+        final taskTitle = _normalizeTitle(t.title);
+        return taskTitle == normalizedTitle;
+      });
+
+      final currentProgress = task.progress;
+
+      // 🟢 Update cache with actual progress
+      _progressCache[bookKey] = currentProgress;
+
+      // Schedule hiding after completion (only once)
+      if (currentProgress >= 1.0 &&
+          !_hiddenOverlays.contains(bookKey) &&
+          !_completionScheduled.containsKey(bookKey)) {
+        _completionScheduled[bookKey] = true;
+        Future.delayed(const Duration(seconds: 1), () {
+          if (mounted) {
+            setState(() {
+              _hiddenOverlays.add(bookKey);
+              _progressCache.remove(bookKey);
+              _completionScheduled.remove(bookKey);
+            });
+          }
+        });
+      }
+
+      return currentProgress;
+    } catch (e) {
+      // 🟢 FIX: Return cached progress if task not found (prevents flicker)
+      if (_progressCache.containsKey(bookKey)) {
+        final cachedProgress = _progressCache[bookKey]!;
+        // Only return cache if it's in progress (not at 0 or 1)
+        if (cachedProgress > 0.0 && cachedProgress < 1.0) {
+          return cachedProgress;
+        }
+      }
+      _progressCache.remove(bookKey);
+      return -1.0; // Not downloading
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
 
-    return Stack(
-      children: [
-        if (widget.isLoading) const Center(child: CircularProgressIndicator()),
-        if (!widget.isLoading && widget.books.isEmpty)
-          Center(
-            child: Text(
-              widget.isLocal ? "No books found." : "No online books.",
-            ),
+    if (widget.isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (widget.books.isEmpty) {
+      return const Center(child: Text("No books found."));
+    }
+
+    return GridView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: widget.books.length,
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        childAspectRatio: 0.55,
+        crossAxisSpacing: 16,
+        mainAxisSpacing: 16,
+      ),
+      itemBuilder: (context, index) {
+        final book = widget.books[index];
+
+        final normalizedFilename = _normalizeTitle(_getOriginalFilename(book));
+        final isSynced = widget.others.any(
+          (b) => _normalizeTitle(_getOriginalFilename(b)) == normalizedFilename,
+        );
+
+        // Get progress
+        final uploadProgress = widget.isLocal ? _getUploadProgress(book) : -1.0;
+        final downloadProgress = !widget.isLocal
+            ? _getDownloadProgress(book)
+            : -1.0;
+
+        final isUploading = uploadProgress >= 0.0;
+        final isDownloading = downloadProgress >= 0.0;
+        final progress = isUploading ? uploadProgress : downloadProgress;
+
+        return GestureDetector(
+          onTap: () => widget.onTap(book),
+          onLongPress: () => widget.onBookLongPress(book),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Stack(
+                  children: [
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white, // 🟢 White background
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      width: double.infinity,
+                      child: (isUploading || isDownloading)
+                          ? ProgressBookCover(
+                              progress: progress,
+                              isUploading: isUploading,
+                              imageBuilder: () => _buildBookCover(book),
+                            )
+                          : _buildBookCover(book),
+                    ),
+
+                    if (isSynced && !isUploading && !isDownloading)
+                      Positioned(
+                        top: 4,
+                        right: 4,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: widget.isLocal
+                                ? Colors.blue.withOpacity(0.9)
+                                : Colors.green.withOpacity(0.9),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.3),
+                                blurRadius: 4,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          padding: const EdgeInsets.all(6),
+                          child: Icon(
+                            widget.isLocal ? Icons.cloud_done : Icons.check,
+                            size: 14,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                book.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
+              ),
+            ],
           ),
-        GridView.builder(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 3,
-            childAspectRatio: 0.55,
-            crossAxisSpacing: 16,
-            mainAxisSpacing: 16,
-          ),
-          itemCount: widget.books.length,
-          itemBuilder: (context, index) {
-            final book = widget.books[index];
-            return AnimatedBookItem(
-              book: book,
-              isLocal: widget.isLocal,
-              onTap: () {
-                if (widget.onBookTap != null) widget.onBookTap!(book);
-              },
-              onLongPress: () {
-                if (widget.onBookLongPress != null)
-                  widget.onBookLongPress!(book);
-              },
-            );
-          },
-        ),
-      ],
+        );
+      },
     );
   }
-}
 
-class AnimatedBookItem extends StatelessWidget {
-  final BookModel book;
-  final bool isLocal;
-  final VoidCallback onTap;
-  final VoidCallback onLongPress;
+  Widget _buildBookCover(BookModel book) {
+    Widget coverWidget;
 
-  const AnimatedBookItem({
-    super.key,
-    required this.book,
-    required this.isLocal,
-    required this.onTap,
-    required this.onLongPress,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      onLongPress: onLongPress,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.grey[200],
-                borderRadius: BorderRadius.circular(8),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child:
-                  book.coverPath != null && File(book.coverPath!).existsSync()
-                  ? Image.file(File(book.coverPath!), fit: BoxFit.cover)
-                  : (book.coverUrl != null
-                        ? CachedNetworkImage(
-                            imageUrl: book.coverUrl!,
-                            // 🟢 Authorization header fix
-                            httpHeaders: {
-                              'Authorization': 'Bearer ${AuthService().token}',
-                              'ngrok-skip-browser-warning': 'true',
-                            },
-                            fit: BoxFit.cover,
-                            errorWidget: (context, url, error) =>
-                                const Icon(Icons.book, size: 40),
-                          )
-                        : const Icon(Icons.book, size: 40)),
-            ),
+    if (book.coverPath != null && File(book.coverPath!).existsSync()) {
+      coverWidget = Image.file(File(book.coverPath!), fit: BoxFit.cover);
+    } else if (book.coverUrl != null) {
+      coverWidget = CachedNetworkImage(
+        imageUrl: book.coverUrl!,
+        httpHeaders: {
+          'Authorization': 'Bearer ${AuthService().token}',
+          'ngrok-skip-browser-warning': 'true',
+        },
+        fit: BoxFit.cover,
+        placeholder: (context, url) => Container(
+          color: Colors.white,
+          child: const Center(
+            child: Icon(Icons.book, size: 48, color: Colors.grey),
           ),
-          const SizedBox(height: 8),
-          Text(
-            book.title,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+        ),
+        errorWidget: (_, __, ___) => Container(
+          color: Colors.white,
+          child: const Center(
+            child: Icon(Icons.book, size: 48, color: Colors.grey),
           ),
-        ],
-      ),
+        ),
+      );
+    } else {
+      coverWidget = Container(
+        color: Colors.white,
+        child: const Center(
+          child: Icon(Icons.book, size: 48, color: Colors.grey),
+        ),
+      );
+    }
+
+    return SizedBox(
+      width: double.infinity,
+      height: double.infinity,
+      child: coverWidget,
     );
   }
 }

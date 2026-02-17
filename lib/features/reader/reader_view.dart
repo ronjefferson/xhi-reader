@@ -20,10 +20,7 @@ class ReaderView extends StatefulWidget {
 class _ReaderViewState extends State<ReaderView> {
   late ReaderViewModel _viewModel;
 
-  // EPUB Controller
   WebViewController? _webViewController;
-
-  // 🟢 PDF Controller (Native PageView Controller)
   PageController? _pageController;
 
   Timer? _spinnerSafetyTimer;
@@ -44,7 +41,8 @@ class _ReaderViewState extends State<ReaderView> {
   void dispose() {
     _spinnerSafetyTimer?.cancel();
     _viewModel.removeListener(_onViewModelUpdate);
-    _pageController?.dispose(); // 🟢 Dispose PageController
+    _viewModel.dispose();
+    _pageController?.dispose();
     super.dispose();
   }
 
@@ -52,7 +50,6 @@ class _ReaderViewState extends State<ReaderView> {
     if (mounted) {
       if (_dragValue == null) setState(() {});
 
-      // EPUB URL Change
       if (!_viewModel.isPdf &&
           _viewModel.epubUrl != null &&
           _viewModel.epubUrl != _currentUrl) {
@@ -60,19 +57,15 @@ class _ReaderViewState extends State<ReaderView> {
         _loadEpubContent(_currentUrl!);
       }
 
-      // 🟢 PDF Jump Request (From Slider or Chapter List)
       if (_viewModel.isPdf && _viewModel.requestJumpToPage != null) {
         int targetPage = _viewModel.requestJumpToPage!;
-        // PageView is 0-indexed, but our pages are 1-indexed
         if (_pageController != null && _pageController!.hasClients) {
           _pageController!.jumpToPage(targetPage - 1);
         }
         _viewModel.requestJumpToPage = null;
       }
 
-      // 🟢 Initialize PageController once PDF is ready
       if (_viewModel.isPdf && _viewModel.isReady && _pageController == null) {
-        // Start at saved page (minus 1 for 0-index)
         int initialPage = (_viewModel.getCurrentGlobalPage() - 1).clamp(
           0,
           _viewModel.totalBookPages - 1,
@@ -83,7 +76,6 @@ class _ReaderViewState extends State<ReaderView> {
     }
   }
 
-  // --- EPUB LOADING ---
   void _loadEpubContent(String url) {
     _startLoading();
     final uri = Uri.parse(url);
@@ -127,14 +119,18 @@ class _ReaderViewState extends State<ReaderView> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final bgColor = theme.scaffoldBackgroundColor;
-    final txtColor = theme.textTheme.bodyMedium?.color ?? Colors.black;
     final isDark = theme.brightness == Brightness.dark;
+    final bgColor = theme.scaffoldBackgroundColor;
+    final txtColor = theme.colorScheme.onSurface;
+    final barColor = isDark ? const Color(0xFF18122B) : const Color(0xFFFCF8F8);
+    final accentColor = isDark
+        ? const Color(0xFF635985)
+        : const Color(0xFFF5AFAF);
 
     if (!_viewModel.isReady) {
       return Scaffold(
         backgroundColor: bgColor,
-        body: const Center(child: CircularProgressIndicator()),
+        body: Center(child: CircularProgressIndicator(color: accentColor)),
       );
     }
 
@@ -144,25 +140,25 @@ class _ReaderViewState extends State<ReaderView> {
       backgroundColor: bgColor,
       body: Stack(
         children: [
-          // 🟢 READER CONTENT
           SafeArea(
             child: _viewModel.isPdf
-                ? _buildPdfPageView(bgColor) // 🟢 New Horizontal PageView
+                ? _buildPdfPageView(bgColor)
                 : WebViewWidget(controller: _webViewController!),
           ),
 
-          // Loading Overlay
           if (_isLoading)
             GestureDetector(
               onTap: () => setState(() => _showControls = !_showControls),
               behavior: HitTestBehavior.opaque,
               child: Container(
                 color: bgColor,
-                child: const Center(child: CircularProgressIndicator()),
+                child: Center(
+                  child: CircularProgressIndicator(color: accentColor),
+                ),
               ),
             ),
 
-          // 🟢 TOP BAR
+          // Top bar
           AnimatedPositioned(
             duration: const Duration(milliseconds: 200),
             top: _showControls ? 0 : -100,
@@ -171,8 +167,12 @@ class _ReaderViewState extends State<ReaderView> {
             child: Container(
               height: kToolbarHeight + MediaQuery.of(context).padding.top,
               padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top),
-              color: (isDark ? const Color(0xFF1E1E1E) : Colors.white)
-                  .withOpacity(0.95),
+              decoration: BoxDecoration(
+                color: barColor.withOpacity(0.97),
+                border: Border(
+                  bottom: BorderSide(color: theme.dividerColor, width: 0.5),
+                ),
+              ),
               child: Row(
                 children: [
                   IconButton(
@@ -199,20 +199,23 @@ class _ReaderViewState extends State<ReaderView> {
             ),
           ),
 
-          // 🟢 BOTTOM BAR
+          // Bottom bar
           AnimatedPositioned(
             duration: const Duration(milliseconds: 200),
             bottom: _showControls ? 0 : -160,
             left: 0,
             right: 0,
             child: Container(
-              color: (isDark ? const Color(0xFF1E1E1E) : Colors.white)
-                  .withOpacity(0.95),
+              decoration: BoxDecoration(
+                color: barColor.withOpacity(0.97),
+                border: Border(
+                  top: BorderSide(color: theme.dividerColor, width: 0.5),
+                ),
+              ),
               padding: const EdgeInsets.fromLTRB(20, 10, 20, 30),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Page Info
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -226,55 +229,62 @@ class _ReaderViewState extends State<ReaderView> {
                       ),
                       Text(
                         "${(((_dragValue ?? _viewModel.getCurrentGlobalPage().toDouble()) / _viewModel.totalBookPages) * 100).toStringAsFixed(1)}%",
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 12,
-                          color: Colors.grey,
+                          color: txtColor.withOpacity(0.5),
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 5),
-                  // Slider
                   Row(
                     children: [
-                      const Text(
+                      Text(
                         "1",
-                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: txtColor.withOpacity(0.5),
+                        ),
                       ),
                       Expanded(
-                        child: Slider(
-                          value:
-                              (_dragValue ??
-                                      _viewModel
-                                          .getCurrentGlobalPage()
-                                          .toDouble())
-                                  .clamp(
-                                    1.0,
-                                    _viewModel.totalBookPages.toDouble(),
-                                  ),
-                          min: 1.0,
-                          max: _viewModel.totalBookPages.toDouble(),
-                          activeColor: isDark ? Colors.white : Colors.black87,
-                          inactiveColor: Colors.grey[300],
-                          // Start Dragging
-                          onChanged: _isLoading
-                              ? null
-                              : (val) => setState(() => _dragValue = val),
-                          // End Dragging -> Jump
-                          onChangeEnd: _isLoading
-                              ? null
-                              : (val) {
-                                  _viewModel.jumpToGlobalPage(val.toInt());
-                                  setState(() => _dragValue = null);
-                                },
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            activeTrackColor: accentColor,
+                            inactiveTrackColor: accentColor.withOpacity(0.2),
+                            thumbColor: accentColor,
+                            overlayColor: accentColor.withOpacity(0.15),
+                            trackHeight: 3,
+                          ),
+                          child: Slider(
+                            value:
+                                (_dragValue ??
+                                        _viewModel
+                                            .getCurrentGlobalPage()
+                                            .toDouble())
+                                    .clamp(
+                                      1.0,
+                                      _viewModel.totalBookPages.toDouble(),
+                                    ),
+                            min: 1.0,
+                            max: _viewModel.totalBookPages.toDouble(),
+                            onChanged: _isLoading
+                                ? null
+                                : (val) => setState(() => _dragValue = val),
+                            onChangeEnd: _isLoading
+                                ? null
+                                : (val) {
+                                    _viewModel.jumpToGlobalPage(val.toInt());
+                                    setState(() => _dragValue = null);
+                                  },
+                          ),
                         ),
                       ),
                       Text(
                         "${_viewModel.totalBookPages}",
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12,
-                          color: Colors.grey,
+                          color: txtColor.withOpacity(0.5),
                         ),
                       ),
                     ],
@@ -288,33 +298,28 @@ class _ReaderViewState extends State<ReaderView> {
     );
   }
 
-  // 🟢 NEW: Horizontal PageView for PDF (One Swipe = One Page)
   Widget _buildPdfPageView(Color bgColor) {
     if (_pageController == null || _viewModel.pdfDoc == null) {
-      return Container(color: bgColor); // Placeholder until ready
+      return Container(color: bgColor);
     }
 
     return GestureDetector(
-      onTap: () {
-        setState(() => _showControls = !_showControls);
-      },
+      onTap: () => setState(() => _showControls = !_showControls),
       child: PageView.builder(
         controller: _pageController,
         itemCount: _viewModel.totalBookPages,
         scrollDirection: Axis.horizontal,
-        physics: const PageScrollPhysics(), // 🟢 Enforces Snap-to-Page
+        physics: const ClampingScrollPhysics(),
         onPageChanged: (index) {
-          // PageView is 0-indexed, Viewmodel is 1-indexed
           _viewModel.onPdfPageChanged(index + 1);
         },
         itemBuilder: (context, index) {
-          // 🟢 Zoom Support: Wrapped in InteractiveViewer
           return InteractiveViewer(
             maxScale: 3.0,
             minScale: 1.0,
             child: PdfPageView(
               document: _viewModel.pdfDoc!,
-              pageNumber: index + 1, // 1-based index
+              pageNumber: index + 1,
               alignment: Alignment.center,
               decoration: BoxDecoration(color: bgColor),
             ),
@@ -324,7 +329,6 @@ class _ReaderViewState extends State<ReaderView> {
     );
   }
 
-  // --- EPUB JS INIT ---
   void _initWebView(Color bgColor) {
     _webViewController = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -333,7 +337,23 @@ class _ReaderViewState extends State<ReaderView> {
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageFinished: (url) {
-            if (!widget.book.isLocal) _injectOnlineAssets();
+            if (!_viewModel.isPdf) {
+              if (widget.book.isLocal) {
+                _applyTheme();
+                _webViewController?.runJavaScript(
+                  'if(window.fixImages) window.fixImages();',
+                );
+                if (_viewModel.requestScrollToProgress != null) {
+                  _executeEpubScroll(_viewModel.requestScrollToProgress!);
+                  _viewModel.requestScrollToProgress = null;
+                }
+                Future.delayed(const Duration(milliseconds: 150), () {
+                  if (mounted) setState(() => _isLoading = false);
+                });
+              } else {
+                _injectAssets();
+              }
+            }
           },
           onWebResourceError: (error) {
             if (mounted) setState(() => _isLoading = false);
@@ -374,127 +394,287 @@ class _ReaderViewState extends State<ReaderView> {
     }
   }
 
-  // ... (Keep _injectOnlineAssets exactly as is) ...
-  void _injectOnlineAssets() {
+  void _injectAssets() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bgHex = isDark ? '#121212' : '#FFFFFF';
-    final textHex = isDark ? '#E0E0E0' : '#000000';
+    final bgHex = isDark ? '#18122B' : '#FCF8F8';
+    final textHex = isDark ? '#E8E0F0' : '#1A1A1A';
     final token = AuthService().token ?? '';
     final apiBaseUrl = ApiService.baseUrl;
 
     const String rawCss = r'''
       * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-      html { height: 100vh !important; width: 100vw !important; overflow: hidden !important; margin: 0 !important; padding: 0 !important; background-color: #ffffff !important; touch-action: pan-y !important; -webkit-user-select: none; user-select: none; }
-      body { height: calc(100vh - 80px) !important; width: 100vw !important; margin: 40px 0 !important; padding: 0 !important; border: none !important; overflow: visible !important; column-width: 100vw !important; column-gap: 0px !important; column-fill: auto !important; font-family: sans-serif !important; font-size: 18px !important; line-height: 1.6 !important; text-align: justify; transform: translate3d(0,0,0); backface-visibility: hidden; }
+      html {
+        height: 100vh !important;
+        width: 100vw !important;
+        overflow: hidden !important;
+        margin: 0 !important; padding: 0 !important;
+        background-color: #ffffff;
+        -webkit-user-select: none; user-select: none;
+        touch-action: none;
+      }
+      body {
+        height: calc(100vh - 80px) !important;
+        width: 100vw !important;
+        margin: 40px 0 !important;
+        padding: 0 !important;
+        border: none !important;
+        overflow: visible !important;
+        font-family: sans-serif !important;
+        font-size: 18px !important;
+        line-height: 1.6 !important;
+        text-align: justify;
+      }
+      #pw {
+        display: block;
+        width: 100vw;
+        height: 100%;
+        column-width: 100vw;
+        column-gap: 0;
+        column-fill: auto;
+        will-change: transform;
+        -webkit-backface-visibility: hidden;
+        backface-visibility: hidden;
+        transform: translate3d(0, 0, 0);
+      }
       p, h1, h2, h3 { margin-left: 20px !important; margin-right: 20px !important; }
-      img { max-width: calc(100vw - 40px) !important; max-height: 100% !important; object-fit: contain !important; display: block !important; margin: 0 auto !important; }
-      html.dark-mode { background-color: #121212 !important; }
-      body.dark-mode { color: #e0e0e0 !important; background-color: #121212 !important; }
+      img {
+        max-width: calc(100vw - 40px) !important;
+        max-height: 100% !important;
+        object-fit: contain !important;
+        display: block !important;
+        margin: 0 auto !important;
+      }
+      html.dark-mode { background-color: #18122B !important; }
+      body.dark-mode  { background-color: #18122B !important; }
+      #pw.dark-mode   { color: #E8E0F0 !important; background-color: #18122B !important; }
     ''';
 
+    // 🟢 UPDATED: Use Global Window Listeners for Cloud Reader too
     const String rawJs = r'''
       (function() {
-          function post(msg) { if(window.PrintReader) window.PrintReader.postMessage(msg); }
-          function getWidth() { return document.documentElement.clientWidth || window.innerWidth; }
-          function getScrollWidth() { return document.body.scrollWidth; }
-          window.setTheme = function(isDark) {
-              if (isDark) { document.documentElement.classList.add('dark-mode'); document.body.classList.add('dark-mode'); }
-              else { document.documentElement.classList.remove('dark-mode'); document.body.classList.remove('dark-mode'); }
+        function post(msg) { if (window.PrintReader) window.PrintReader.postMessage(msg); }
+
+        var pw = document.getElementById('pw');
+        if (!pw) {
+          pw = document.createElement('div');
+          pw.id = 'pw';
+          while (document.body.firstChild) pw.appendChild(document.body.firstChild);
+          document.body.appendChild(pw);
+        }
+
+        function W()  { return document.documentElement.clientWidth || window.innerWidth; }
+        function SW() { return pw.scrollWidth; }
+
+        var curX = 0;
+        function setX(x) {
+          curX = x;
+          pw.style.transform = 'translate3d(' + (-x) + 'px, 0, 0)';
+        }
+
+        window.setTheme = function(dark) {
+          var cls = dark ? 'add' : 'remove';
+          document.documentElement.classList[cls]('dark-mode');
+          document.body.classList[cls]('dark-mode');
+          pw.classList[cls]('dark-mode');
+        };
+
+        window.scrollToPercent = function(pct) {
+          var total = SW() - W();
+          setX(pct * total);
+        };
+
+        function fixImages() {
+          var token   = window._tok  || '';
+          var baseUrl = window._base || '';
+          var imgs    = pw.getElementsByTagName('img');
+          for (var i = 0; i < imgs.length; i++) {
+            var s = imgs[i].src, orig = s;
+            if (baseUrl && (s.indexOf('localhost') > -1 || s.indexOf('127.0.0.1') > -1))
+              s = s.replace(/http:\/\/(localhost|127\.0\.0\.1)(:\d+)?/gi, baseUrl);
+            if (s.indexOf('/Images/') > -1) s = s.replace('/Images/', '/images/');
+            if (token && s.indexOf('token=') === -1)
+              s += (s.indexOf('?') > -1 ? '&' : '?') + 'token=' + token;
+            if (s !== orig) imgs[i].src = s;
           }
-          function setScroll(x) { document.body.style.transform = 'translate3d(' + (-x) + 'px, 0, 0)'; window.globalScrollX = x; }
-          window.globalScrollX = 0;
-          function fixImages() {
-              let token = window.AUTH_TOKEN || ''; 
-              let baseUrl = window.API_BASE_URL || '';
-              let imgs = document.getElementsByTagName('img');
-              for(let i=0; i<imgs.length; i++) {
-                let src = imgs[i].src;
-                let originalSrc = src;
-                if (baseUrl && (src.includes('localhost') || src.includes('127.0.0.1'))) {
-                    src = src.replace(/http:\/\/(localhost|127\.0\.0\.1)(:\d+)?/gi, baseUrl);
-                }
-                if (src.includes('/Images/')) src = src.replace('/Images/', '/images/');
-                if (token && !src.includes('token=')) {
-                    let separator = src.includes('?') ? '&' : '?';
-                    src = src + separator + 'token=' + token;
-                }
-                if (src !== originalSrc) imgs[i].src = src;
-              }
+        }
+        window.fixImages = fixImages;
+
+        var startX    = 0;
+        var startY    = 0;
+        var startPage = 0;
+        var dragging  = false;
+        var moved     = false;
+
+        // 🟢 WINDOW LISTENERS (Fixes Dead Zones)
+        window.addEventListener('touchstart', function(e) {
+          startX    = e.touches[0].clientX;
+          startY    = e.touches[0].clientY;
+          startPage = Math.round(curX / W());
+          dragging  = true;
+          moved     = false;
+          window._snapCancel = true;
+        }, { passive: true });
+
+        window.addEventListener('touchmove', function(e) {
+          if (!dragging) return;
+          moved = true;
+          var diff = startX - e.touches[0].clientX;
+          var targetX = startPage * W() + diff;
+          setX(Math.max(-W(), Math.min(SW(), targetX)));
+        }, { passive: true });
+
+        function onTouchEnd(e) {
+          if (!dragging) return;
+          dragging = false;
+
+          var w       = W();
+          var touch   = e.changedTouches ? e.changedTouches[0] : e.touches[0];
+          var clientX = touch ? touch.clientX : startX;
+          var clientY = touch ? touch.clientY : startY;
+          var diffX   = startX - clientX;
+          var diffY   = startY - clientY;
+
+          if (!moved || (Math.abs(diffX) < 10 && Math.abs(diffY) < 10)) {
+            post('toggle_controls');
+            var validP = Math.max(0, Math.min(Math.ceil((SW()-20)/w)-1, startPage));
+            snapTo(validP * w);
+            return;
           }
-          function init() {
-              fixImages();
-              setTimeout(fixImages, 300); 
-              const w = getWidth();
-              const params = new URLSearchParams(window.location.search);
-              if (params.get('pos') === 'end') setScroll(getScrollWidth() - w);
-              else setScroll(0);
-              setTimeout(function(){ post('ready'); }, 200);
+
+          var maxX = SW() - w;
+
+          if (curX < -w * 0.15) {
+             snapTo(-w); 
+             setTimeout(function(){ post('prev_chapter'); }, 300);
+             return;
           }
-          let startX = 0; let isDragging = false; let startPage = 0; 
-          window.addEventListener('touchstart', function(e) { startX = e.touches[0].clientX; isDragging = true; const w = getWidth(); const maxPage = Math.ceil((getScrollWidth() - 20) / w) - 1; let rawStart = Math.round((window.globalScrollX || 0) / w); if (rawStart > maxPage) rawStart = maxPage; if (rawStart < 0) rawStart = 0; startPage = rawStart; }, {passive: false});
-          window.addEventListener('touchmove', function(e) { if (!isDragging) return; const diff = startX - e.touches[0].clientX; if (e.cancelable) e.preventDefault(); setScroll((startPage * getWidth()) + diff); }, {passive: false});
-          window.addEventListener('touchend', function(e) { if (!isDragging) return; isDragging = false; const w = getWidth(); const diff = startX - e.changedTouches[0].clientX; if (Math.abs(diff) < 10) { post('toggle_controls'); return; } let targetPage = startPage; if (diff > 50) targetPage = startPage + 1; else if (diff < -50) targetPage = startPage - 1; const maxPage = Math.ceil((getScrollWidth() - 20) / w) - 1; if (targetPage < 0) { const params = new URLSearchParams(window.location.search); if (params.get('isFirst') !== 'true') { post('prev_chapter'); return; } targetPage = 0; } if (targetPage > maxPage) { post('next_chapter'); return; } const targetX = targetPage * w; smoothScrollTo(targetX); }, {passive: false});
-          function smoothScrollTo(targetX) { const start = window.globalScrollX || 0; const dist = targetX - start; let startTime = null; function step(ts) { if (!startTime) startTime = ts; const p = Math.min((ts - startTime)/250, 1); const ease = 1 - Math.pow(1 - p, 3); setScroll(start + (dist * ease)); if (p < 1) requestAnimationFrame(step); else { setScroll(targetX); const total = getScrollWidth() - getWidth(); post('progress:' + (total > 0 ? targetX/total : 0)); } } requestAnimationFrame(step); }
-          init();
+
+          if (curX > maxX + w * 0.15) {
+             snapTo(SW()); 
+             setTimeout(function(){ post('next_chapter'); }, 300);
+             return;
+          }
+
+          var threshold = w * 0.15;
+          var targetPage = startPage;
+          if (diffX > threshold) targetPage = startPage + 1;
+          else if (diffX < -threshold) targetPage = startPage - 1;
+
+          var maxPage = Math.ceil((SW() - 20) / w) - 1;
+          targetPage = Math.max(0, Math.min(maxPage, targetPage));
+          snapTo(targetPage * w);
+        }
+
+        window.addEventListener('touchend', onTouchEnd, { passive: true });
+        window.addEventListener('touchcancel', onTouchEnd, { passive: true });
+
+        function snapTo(targetX) {
+          window._snapCancel = false;
+          var startV = curX;
+          var dist   = targetX - startV;
+          if (Math.abs(dist) < 1) { setX(targetX); reportProgress(targetX); return; }
+
+          var startT = null;
+          var dur    = Math.min(600, Math.abs(dist) * 0.8);
+
+          function step(ts) {
+            if (window._snapCancel) return;
+            if (!startT) startT = ts;
+            var t = Math.min((ts - startT) / dur, 1);
+            var ease = 1 - Math.pow(1 - t, 3);
+            setX(startV + dist * ease);
+            if (t < 1) requestAnimationFrame(step);
+            else { setX(targetX); reportProgress(targetX); }
+          }
+          requestAnimationFrame(step);
+        }
+
+        function reportProgress(x) {
+          var total = SW() - W();
+          var validX = Math.max(0, Math.min(total, x));
+          post('progress:' + (total > 0 ? validX / total : 0));
+        }
+
+        function init() {
+          fixImages();
+          setTimeout(fixImages, 300);
+          var params = new URLSearchParams(window.location.search);
+          if (params.get('pos') === 'end') setX(SW() - W());
+          else setX(0);
+          setTimeout(function() { post('ready'); }, 200);
+        }
+
+        init();
       })();
     ''';
 
-    String cssBase64 = base64Encode(utf8.encode(rawCss));
-    String jsBase64 = base64Encode(utf8.encode(rawJs));
+    final String cssB64 = base64Encode(utf8.encode(rawCss));
+    final String jsB64 = base64Encode(utf8.encode(rawJs));
 
     _webViewController?.runJavaScript('''
-      window.AUTH_TOKEN = "$token";
-      window.API_BASE_URL = "$apiBaseUrl";
-      var style = document.createElement('style');
-      style.innerHTML = decodeURIComponent(escape(window.atob('$cssBase64')));
-      document.head.appendChild(style);
+      window._tok  = "$token";
+      window._base = "$apiBaseUrl";
+      var st = document.createElement('style');
+      st.innerHTML = decodeURIComponent(escape(window.atob('$cssB64')));
+      document.head.appendChild(st);
       document.body.style.backgroundColor = "$bgHex";
       document.body.style.color = "$textHex";
-      var script = document.createElement('script');
-      script.innerHTML = decodeURIComponent(escape(window.atob('$jsBase64')));
-      document.head.appendChild(script);
+      var sc = document.createElement('script');
+      sc.innerHTML = decodeURIComponent(escape(window.atob('$jsB64')));
+      document.head.appendChild(sc);
     ''');
   }
 
   void _showChapterList() {
-    final bgColor = Theme.of(context).scaffoldBackgroundColor;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final accent = isDark ? const Color(0xFF635985) : const Color(0xFFF5AFAF);
     final chapters = _viewModel.chapterTitles;
 
     if (chapters.isEmpty) {
-      if (_viewModel.isPdf) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("No table of contents available.")),
-        );
-      } else {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text("No chapters found.")));
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _viewModel.isPdf
+                ? "No table of contents available."
+                : "No chapters found.",
+          ),
+        ),
+      );
       return;
     }
 
     showModalBottomSheet(
       context: context,
-      backgroundColor: bgColor,
+      backgroundColor: theme.scaffoldBackgroundColor,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (context) {
-        return ListView.separated(
-          padding: const EdgeInsets.symmetric(vertical: 20),
-          itemCount: chapters.length,
-          separatorBuilder: (c, i) => const Divider(height: 1),
-          itemBuilder: (context, index) {
-            return ListTile(
-              title: Text(chapters[index]),
-              onTap: () {
-                Navigator.pop(context);
-                _viewModel.jumpToChapter(index);
-              },
-            );
-          },
-        );
-      },
+      builder: (_) => ListView.separated(
+        padding: const EdgeInsets.symmetric(vertical: 20),
+        itemCount: chapters.length,
+        separatorBuilder: (_, __) =>
+            Divider(height: 1, color: theme.dividerColor),
+        itemBuilder: (_, i) {
+          final bool current = i == _viewModel.currentChapterIndex;
+          return ListTile(
+            title: Text(
+              chapters[i],
+              style: TextStyle(
+                color: current ? accent : theme.colorScheme.onSurface,
+                fontWeight: current ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
+            trailing: current
+                ? Icon(Icons.circle, size: 8, color: accent)
+                : null,
+            onTap: () {
+              Navigator.pop(context);
+              _viewModel.jumpToChapter(i);
+            },
+          );
+        },
+      ),
     );
   }
 }

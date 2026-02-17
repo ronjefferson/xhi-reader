@@ -6,7 +6,7 @@ import '../../models/book_model.dart';
 class ApiService {
   // Use 10.0.2.2 for Android Emulator, otherwise localhost or your IP
   static const String _baseUrl = "http://10.0.2.2:8000";
-
+  //static const String _baseUrl = "https://43b3-5-38-60-236.ngrok-free.app";
   static String get baseUrl => _baseUrl;
 
   static final ApiService _instance = ApiService._internal();
@@ -29,7 +29,6 @@ class ApiService {
   // --- 1. FETCH BOOKS (GET /books/) ---
   Future<List<BookModel>> fetchUserBooks() async {
     final url = Uri.parse('$_baseUrl/books/');
-
     final response = await _authenticatedRequest(
       (headers) => http.get(url, headers: headers),
     );
@@ -68,7 +67,9 @@ class ApiService {
     final response = await _authenticatedRequest(
       (headers) => http.delete(url, headers: headers),
     );
-    return response.statusCode == 200;
+
+    // 🟢 IMPROVED: Accept both 200 and 204 (No Content)
+    return response.statusCode == 200 || response.statusCode == 204;
   }
 
   // --- 3. MANIFEST (GET /books/{id}/manifest) ---
@@ -87,7 +88,6 @@ class ApiService {
   // --- 4. GET PROGRESS (GET /books/{id}/progress) ---
   Future<Map<String, dynamic>?> getReadingProgress(int bookId) async {
     final url = Uri.parse('$_baseUrl/books/$bookId/progress');
-
     final response = await _authenticatedRequest(
       (headers) => http.get(url, headers: headers),
     );
@@ -134,7 +134,6 @@ class ApiService {
         response = await request(authHeaders);
       }
     }
-
     return response;
   }
 }

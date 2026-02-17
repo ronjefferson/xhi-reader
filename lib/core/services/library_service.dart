@@ -62,7 +62,6 @@ class LibraryService {
     };
   }
 
-  // 🟢 NEW: Update Timestamp
   Future<void> updateLastRead(String bookId) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(
@@ -71,7 +70,6 @@ class LibraryService {
     );
   }
 
-  // 🟢 NEW: Sort Any List (Cloud or Local)
   Future<List<BookModel>> sortBooksByRecent(List<BookModel> books) async {
     final prefs = await SharedPreferences.getInstance();
     List<BookModel> updatedBooks = [];
@@ -127,42 +125,16 @@ class LibraryService {
     }
 
     processedBooks.sort((a, b) {
-      if (b.lastRead == null) return -1;
-      if (a.lastRead == null) return 1;
+      // 🟢 FIX: Books without lastRead go to the END
+      if (a.lastRead == null && b.lastRead == null) return 0;
+      if (a.lastRead == null) return 1; // a goes to end
+      if (b.lastRead == null) return -1; // b goes to end
+      // Most recent first (descending)
       return b.lastRead!.compareTo(a.lastRead!);
     });
 
     _loadedBooks = processedBooks;
     return processedBooks;
-  }
-
-  bool isBookDownloaded(String onlineTitle) {
-    if (_loadedBooks.isEmpty) return false;
-    final cleanOnline = _normalize(onlineTitle);
-
-    return _loadedBooks.any((localBook) {
-      final cleanLocal = _normalize(localBook.title);
-
-      if (cleanLocal == cleanOnline) return true;
-
-      final filename = p
-          .basenameWithoutExtension(localBook.filePath ?? "")
-          .toLowerCase()
-          .replaceAll(RegExp(r'[^a-z0-9]'), '');
-      if (filename.isNotEmpty && filename == cleanOnline) return true;
-
-      if (cleanLocal.length > 4 && cleanOnline.length > 4) {
-        if (cleanLocal.contains(cleanOnline) ||
-            cleanOnline.contains(cleanLocal)) {
-          return true;
-        }
-      }
-      return false;
-    });
-  }
-
-  String _normalize(String input) {
-    return input.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
   }
 
   // --- SCANNERS ---
@@ -184,7 +156,9 @@ class LibraryService {
         for (var entity in files) {
           if (entity is File) {
             final ext = p.extension(entity.path).toLowerCase();
-            if (ext != '.epub' && ext != '.pdf') continue;
+
+            // 🟢 ONLY SCAN EPUB FILES
+            if (ext != '.epub') continue;
 
             if (seenPaths.contains(entity.path)) continue;
             seenPaths.add(entity.path);
@@ -214,7 +188,7 @@ class LibraryService {
               }
             }
 
-            if (needsProcessing) {
+            if (needsProcessing || forceRefresh) {
               if (ext == '.epub') {
                 await _extractEpubCover(entity, coverFile);
               } else {
@@ -267,7 +241,8 @@ class LibraryService {
           for (var f in folderFiles) {
             if (f is File) {
               final ext = p.extension(f.path).toLowerCase();
-              if (ext == '.pdf' || ext == '.epub') bookFile = f;
+              // 🟢 ONLY SCAN EPUB FILES
+              if (ext == '.epub') bookFile = f;
               if (p.basename(f.path).contains('cover')) coverFile = f;
             }
           }
@@ -306,7 +281,7 @@ class LibraryService {
   Future<void> importPdf() async {
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['pdf', 'epub'],
+      allowedExtensions: ['epub'], // 🟢 ONLY EPUB
     );
 
     if (result != null && result.files.single.path != null) {
@@ -316,8 +291,9 @@ class LibraryService {
       final appDataDir = await _getAppDataDirectory();
       final bookDataDir = Directory('${appDataDir.path}/$bookId');
 
-      if (!await bookDataDir.exists())
+      if (!await bookDataDir.exists()) {
         await bookDataDir.create(recursive: true);
+      }
 
       final ext = p.extension(originalFile.path).toLowerCase();
       final savedFile = await originalFile.copy(
@@ -325,11 +301,8 @@ class LibraryService {
       );
       final coverFile = File('${bookDataDir.path}/cover.png');
 
-      if (ext == '.pdf') {
-        await _generatePdfCover(savedFile, coverFile);
-      } else {
-        await _extractEpubCover(savedFile, coverFile);
-      }
+      // 🟢 ONLY EPUB
+      await _extractEpubCover(savedFile, coverFile);
     }
   }
 
@@ -376,14 +349,16 @@ class LibraryService {
       String? coverId;
 
       for (var meta in opfXml.findAllElements('meta')) {
-        if (meta.getAttribute('name') == 'cover')
+        if (meta.getAttribute('name') == 'cover') {
           coverId = meta.getAttribute('content');
+        }
       }
 
       if (coverId != null) {
         for (var item in opfXml.findAllElements('item')) {
-          if (item.getAttribute('id') == coverId)
+          if (item.getAttribute('id') == coverId) {
             coverHref = item.getAttribute('href');
+          }
         }
       }
 
@@ -413,30 +388,64 @@ class LibraryService {
     }
   }
 
-  // --- 🟢 NEW ADDITIONS ---
-
-  // Virtual Rename (App-only)
-  Future<void> renameBookVirtual(String bookId, String newTitle) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('custom_title_$bookId', newTitle);
-  }
-
-  // File Deletion (App Folder only)
+  // 🟢 FIXED DELETE FUNCTION
   Future<bool> deleteBook(BookModel book) async {
     try {
       if (book.filePath != null) {
         final file = File(book.filePath!);
-        final directory = file.parent;
-        // Safety: only delete if within our app folder
-        if (directory.path.contains(_appFolderName) &&
-            await directory.exists()) {
-          await directory.delete(recursive: true);
-          return true;
+
+        // Delete the actual book file
+        if (await file.exists()) {
+          await file.delete();
+          debugPrint("Deleted book file: ${file.path}");
         }
+
+        // Clean up the cover/metadata folder in app directory
+        final fileName = p.basenameWithoutExtension(file.path);
+        final bookId = fileName.replaceAll(RegExp(r'\s+'), '_');
+        final appDataDir = await _getAppDataDirectory();
+        final coverDir = Directory('${appDataDir.path}/$bookId');
+
+        if (await coverDir.exists()) {
+          await coverDir.delete(recursive: true);
+          debugPrint("Deleted cover directory: ${coverDir.path}");
+        }
+
+        // Clean up SharedPreferences
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('last_chapter_${book.id}');
+        await prefs.remove('last_progress_${book.id}');
+        await prefs.remove('last_read_${book.id}');
+        await prefs.remove('custom_title_${book.id}');
+        debugPrint("Cleaned up SharedPreferences for book: ${book.id}");
+
+        return true;
       }
     } catch (e) {
       debugPrint("Delete Error: $e");
     }
     return false;
+  }
+
+  // Rename book (virtual only)
+  Future<void> renameBookVirtual(String bookId, String newTitle) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('custom_title_$bookId', newTitle);
+  }
+
+  // Helper for Sync Indicators
+  bool isBookDownloaded(String onlineTitle) {
+    if (_loadedBooks.isEmpty) return false;
+    final cleanOnline = _normalize(onlineTitle);
+    return _loadedBooks.any(
+      (localBook) => _normalize(localBook.title) == cleanOnline,
+    );
+  }
+
+  String _normalize(String input) {
+    // Aggressive normalization to match "Book Name.pdf" with "Book Name"
+    var text = input.toLowerCase();
+    text = text.replaceAll('.pdf', '').replaceAll('.epub', '');
+    return text.replaceAll(RegExp(r'[^a-z0-9]'), '');
   }
 }

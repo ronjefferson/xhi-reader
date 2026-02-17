@@ -29,11 +29,18 @@ class _QueueViewState extends State<QueueView>
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final accentColor = theme.brightness == Brightness.dark
+        ? const Color(0xFF635985)
+        : const Color(0xFFF5AFAF);
+
     return Scaffold(
       appBar: AppBar(
         title: const Text("Activity Queue"),
         bottom: TabBar(
           controller: _tabController,
+          labelColor: accentColor,
+          indicatorColor: accentColor,
           tabs: const [
             Tab(text: "Downloads", icon: Icon(Icons.download)),
             Tab(text: "Uploads", icon: Icon(Icons.cloud_upload)),
@@ -95,6 +102,9 @@ class DownloadList extends StatelessWidget {
               );
             } else {
               return NotificationEntryCard(
+                key: ValueKey(
+                  'download_${task.bookId}_${task.status}',
+                ), // 🟢 Unique key
                 title: task.title,
                 message: isDone ? "Download Completed" : "Download Failed",
                 icon: isDone ? Icons.check_circle : Icons.error,
@@ -148,6 +158,9 @@ class UploadList extends StatelessWidget {
               );
             } else {
               return NotificationEntryCard(
+                key: ValueKey(
+                  'upload_${task.id}_${task.status}',
+                ), // 🟢 Unique key
                 title: task.title,
                 message: isDone
                     ? "Upload Completed"
@@ -187,14 +200,27 @@ class ProgressEntryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    // 🟢 THEME-AWARE COLORS
+    final cardColor = isDark ? const Color(0xFF393053) : Colors.white;
+    final iconBgColor = isDark ? const Color(0xFF443C68) : Colors.grey[100];
+    final iconColor = isDark ? Colors.white70 : Colors.grey;
+    final textColor = isDark ? Colors.white70 : Colors.grey[600];
+    final progressBg = isDark ? const Color(0xFF443C68) : Colors.grey[200];
+    final accentColor = isDark
+        ? const Color(0xFF635985)
+        : const Color(0xFFF5AFAF);
+
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: cardColor,
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withOpacity(isDark ? 0.3 : 0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -208,10 +234,10 @@ class ProgressEntryCard extends StatelessWidget {
                 width: 40,
                 height: 40,
                 decoration: BoxDecoration(
-                  color: Colors.grey[100],
+                  color: iconBgColor,
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Icon(Icons.insert_drive_file, color: Colors.grey),
+                child: Icon(Icons.insert_drive_file, color: iconColor),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -220,13 +246,16 @@ class ProgressEntryCard extends StatelessWidget {
                   children: [
                     Text(
                       title,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: theme.colorScheme.onSurface,
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                     Text(
                       status,
-                      style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                      style: TextStyle(color: textColor, fontSize: 12),
                     ),
                   ],
                 ),
@@ -235,13 +264,13 @@ class ProgressEntryCard extends StatelessWidget {
                 IconButton(
                   icon: Icon(
                     isPaused ? Icons.play_arrow : Icons.pause,
-                    color: Colors.blue,
+                    color: accentColor,
                   ),
                   onPressed: onPause,
                   tooltip: isPaused ? "Resume" : "Pause",
                 ),
               IconButton(
-                icon: const Icon(Icons.close, color: Colors.grey),
+                icon: Icon(Icons.close, color: iconColor),
                 onPressed: onCancel,
                 tooltip: "Cancel",
               ),
@@ -250,7 +279,8 @@ class ProgressEntryCard extends StatelessWidget {
           const SizedBox(height: 12),
           LinearProgressIndicator(
             value: progress,
-            backgroundColor: Colors.grey[200],
+            backgroundColor: progressBg,
+            valueColor: AlwaysStoppedAnimation<Color>(accentColor),
             borderRadius: BorderRadius.circular(4),
             minHeight: 6,
           ),
@@ -269,6 +299,8 @@ class NotificationEntryCard extends StatefulWidget {
   final IconData icon;
   final Color color;
   final VoidCallback onDelete;
+  final bool autoDismiss;
+  final VoidCallback? onAutoDismiss;
 
   const NotificationEntryCard({
     super.key,
@@ -277,6 +309,8 @@ class NotificationEntryCard extends StatefulWidget {
     required this.icon,
     required this.color,
     required this.onDelete,
+    this.autoDismiss = false,
+    this.onAutoDismiss,
   });
 
   @override
@@ -286,8 +320,13 @@ class NotificationEntryCard extends StatefulWidget {
 class _NotificationEntryCardState extends State<NotificationEntryCard> {
   bool _isMenuOpen = false;
 
-  // 🟢 Fixed Width for Action Area: Enough for Delete + Close buttons
   static const double _actionAreaWidth = 120.0;
+
+  @override
+  void initState() {
+    super.initState();
+    // Queue entries stay until manually deleted
+  }
 
   void _toggleMenu() {
     setState(() => _isMenuOpen = !_isMenuOpen);
@@ -297,74 +336,82 @@ class _NotificationEntryCardState extends State<NotificationEntryCard> {
     if (_isMenuOpen) setState(() => _isMenuOpen = false);
   }
 
+  // 🟢 FIX: Close menu before deleting
+  void _handleDelete() {
+    _closeMenu();
+    // Small delay to let animation complete
+    Future.delayed(const Duration(milliseconds: 100), () {
+      widget.onDelete();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final screenWidth = MediaQuery.of(context).size.width;
-    // Adjust for list padding (16 left + 16 right = 32)
     final availableWidth = screenWidth - 32;
-
-    // Calculate shrunk width
     final double cardWidth = _isMenuOpen
         ? availableWidth - _actionAreaWidth
         : availableWidth;
 
-    // 🟢 TAP REGION: This detects taps ANYWHERE else on the screen
+    // 🟢 THEME-AWARE COLORS
+    final bgColor = isDark ? const Color(0xFF443C68) : Colors.grey[100];
+    final cardColor = isDark ? const Color(0xFF393053) : Colors.white;
+    final borderColor = isDark ? const Color(0xFF635985) : Colors.grey.shade300;
+
     return TapRegion(
       onTapOutside: (event) => _closeMenu(),
       child: GestureDetector(
         onLongPress: () {
           if (!_isMenuOpen) _toggleMenu();
         },
-        onTap: _closeMenu, // Also close if tapping the card itself while open
+        onTap: _closeMenu,
         child: Stack(
-          alignment: Alignment.centerLeft, // Keep content pinned left
+          alignment: Alignment.centerLeft,
           children: [
-            // 1. BACKGROUND ACTIONS LAYER (Revealed on Right)
+            // 1. BACKGROUND ACTIONS LAYER
             Container(
               height: 72,
-              width: availableWidth, // Fill full width behind
+              width: availableWidth,
               decoration: BoxDecoration(
-                color: Colors.grey[100],
+                color: bgColor,
                 borderRadius: BorderRadius.circular(12),
               ),
-              // Padding ensures buttons aren't glued to the edge
               padding: const EdgeInsets.only(right: 8),
               child: Row(
-                mainAxisAlignment:
-                    MainAxisAlignment.end, // Push buttons to right
+                mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  // 🟢 DELETE ICON (Left)
                   IconButton(
-                    onPressed: widget.onDelete,
+                    onPressed: _handleDelete,
                     icon: const Icon(Icons.delete_outline, color: Colors.red),
                     tooltip: "Delete",
                   ),
-
-                  // 🟢 CLOSE ICON (Right of Delete)
                   IconButton(
                     onPressed: _closeMenu,
-                    icon: const Icon(Icons.close, color: Colors.grey),
+                    icon: Icon(
+                      Icons.close,
+                      color: isDark ? Colors.white70 : Colors.grey,
+                    ),
                     tooltip: "Close",
                   ),
                 ],
               ),
             ),
 
-            // 2. FOREGROUND CONTENT LAYER (Shrinks Width)
+            // 2. FOREGROUND CONTENT LAYER
             AnimatedContainer(
               duration: const Duration(milliseconds: 300),
               curve: Curves.easeOutCubic,
               width: cardWidth,
               height: 72,
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: cardColor,
                 borderRadius: BorderRadius.circular(12),
-                border: _isMenuOpen
-                    ? Border.all(color: Colors.grey.shade300)
-                    : null,
+                border: _isMenuOpen ? Border.all(color: borderColor) : null,
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
+                    color: Colors.black.withOpacity(isDark ? 0.3 : 0.05),
                     blurRadius: 8,
                     offset: const Offset(0, 2),
                   ),
@@ -382,7 +429,10 @@ class _NotificationEntryCardState extends State<NotificationEntryCard> {
                       children: [
                         Text(
                           widget.title,
-                          style: const TextStyle(fontWeight: FontWeight.bold),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: theme.colorScheme.onSurface,
+                          ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -397,11 +447,12 @@ class _NotificationEntryCardState extends State<NotificationEntryCard> {
                       ],
                     ),
                   ),
-                  // Small visual hint arrow when closed
                   if (!_isMenuOpen)
                     Icon(
                       Icons.chevron_left,
-                      color: Colors.grey.withOpacity(0.3),
+                      color: (isDark ? Colors.white : Colors.grey).withOpacity(
+                        0.3,
+                      ),
                       size: 16,
                     ),
                 ],

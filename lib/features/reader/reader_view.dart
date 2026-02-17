@@ -339,6 +339,7 @@ class _ReaderViewState extends State<ReaderView> {
           onPageFinished: (url) {
             if (!_viewModel.isPdf) {
               if (widget.book.isLocal) {
+                // Local Books: CSS/JS is on disk.
                 _applyTheme();
                 _webViewController?.runJavaScript(
                   'if(window.fixImages) window.fixImages();',
@@ -351,6 +352,7 @@ class _ReaderViewState extends State<ReaderView> {
                   if (mounted) setState(() => _isLoading = false);
                 });
               } else {
+                // Cloud Books: Inject JS/CSS
                 _injectAssets();
               }
             }
@@ -401,100 +403,66 @@ class _ReaderViewState extends State<ReaderView> {
     final token = AuthService().token ?? '';
     final apiBaseUrl = ApiService.baseUrl;
 
-    const String rawCss = r'''
-      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-      html {
-        height: 100vh !important;
-        width: 100vw !important;
-        overflow: hidden !important;
-        margin: 0 !important; padding: 0 !important;
-        background-color: #ffffff;
-        -webkit-user-select: none; user-select: none;
-        touch-action: none;
-      }
-      body {
-        height: calc(100vh - 80px) !important;
-        width: 100vw !important;
-        margin: 40px 0 !important;
-        padding: 0 !important;
-        border: none !important;
-        overflow: visible !important;
-        font-family: sans-serif !important;
-        font-size: 18px !important;
-        line-height: 1.6 !important;
-        text-align: justify;
-      }
-      #pw {
-        display: block;
-        width: 100vw;
-        height: 100%;
-        column-width: 100vw;
-        column-gap: 0;
-        column-fill: auto;
-        will-change: transform;
-        -webkit-backface-visibility: hidden;
-        backface-visibility: hidden;
-        transform: translate3d(0, 0, 0);
-      }
-      p, h1, h2, h3 { margin-left: 20px !important; margin-right: 20px !important; }
-      img {
-        max-width: calc(100vw - 40px) !important;
-        max-height: 100% !important;
-        object-fit: contain !important;
-        display: block !important;
-        margin: 0 auto !important;
-      }
-      html.dark-mode { background-color: #18122B !important; }
-      body.dark-mode  { background-color: #18122B !important; }
-      #pw.dark-mode   { color: #E8E0F0 !important; background-color: #18122B !important; }
-    ''';
-
-    // 🟢 UPDATED: Use Global Window Listeners for Cloud Reader too
+    // Mirrors reader.js exactly — same GPU hints, same passive touch, same snap logic.
+    // Only difference: image fixer uses _base URL replacement instead of localhost swap.
     const String rawJs = r'''
       (function() {
         function post(msg) { if (window.PrintReader) window.PrintReader.postMessage(msg); }
-
-        var pw = document.getElementById('pw');
-        if (!pw) {
-          pw = document.createElement('div');
-          pw.id = 'pw';
-          while (document.body.firstChild) pw.appendChild(document.body.firstChild);
-          document.body.appendChild(pw);
-        }
-
         function W()  { return document.documentElement.clientWidth || window.innerWidth; }
-        function SW() { return pw.scrollWidth; }
+        function SW() { return document.body.scrollWidth; }
+
+        // Mirror reader.js: set GPU hints directly on body via JS
+        var s = document.body.style;
+        s.height              = (window.innerHeight - 80) + 'px';
+        s.width               = '100vw';
+        s.margin              = '40px 0';
+        s.padding             = '0';
+        s.columnWidth         = '100vw';
+        s.columnGap           = '0';
+        s.columnFill          = 'auto';
+        s.willChange          = 'transform';
+        s.webkitBackfaceVisibility = 'hidden';
+        s.backfaceVisibility  = 'hidden';
+        s.overflow            = 'visible';
+
+        document.documentElement.style.overflow = 'hidden';
+        document.documentElement.style.height   = '100vh';
+        document.documentElement.style.width    = '100vw';
 
         var curX = 0;
         function setX(x) {
           curX = x;
-          pw.style.transform = 'translate3d(' + (-x) + 'px, 0, 0)';
+          document.body.style.transform = 'translate3d(' + (-x) + 'px, 0, 0)';
+          window.globalScrollX = x;
         }
+        window.globalScrollX = 0;
 
-        window.setTheme = function(dark) {
-          var cls = dark ? 'add' : 'remove';
-          document.documentElement.classList[cls]('dark-mode');
-          document.body.classList[cls]('dark-mode');
-          pw.classList[cls]('dark-mode');
+        window.setTheme = function(isDark) {
+          var fn = isDark ? 'add' : 'remove';
+          document.documentElement.classList[fn]('dark-mode');
+          document.body.classList[fn]('dark-mode');
         };
 
-        window.scrollToPercent = function(pct) {
-          var total = SW() - W();
-          setX(pct * total);
+        window.scrollToPercent = function(percent) {
+          var w      = W();
+          var total  = SW() - w;
+          var target = Math.round((total * percent) / w) * w;
+          setX(target);
         };
 
         function fixImages() {
           var token   = window._tok  || '';
           var baseUrl = window._base || '';
-          var imgs    = pw.getElementsByTagName('img');
+          var imgs    = document.getElementsByTagName('img');
           for (var i = 0; i < imgs.length; i++) {
-            var s = imgs[i].src, orig = s;
-            if (baseUrl && (s.indexOf('localhost') > -1 || s.indexOf('127.0.0.1') > -1))
-              s = s.replace(/http:\/\/(localhost|127\.0\.0\.1)(:\d+)?/gi, baseUrl);
-            if (s.indexOf('/Images/') > -1) s = s.replace('/Images/', '/images/');
-            if (token && s.indexOf('token=') === -1)
-              s += (s.indexOf('?') > -1 ? '&' : '?') + 'token=' + token;
-            if (s !== orig) imgs[i].src = s;
+            var src = imgs[i].src, orig = src;
+            if (baseUrl && (src.indexOf('localhost') > -1 || src.indexOf('127.0.0.1') > -1))
+              src = src.replace(/http:\/\/(localhost|127\.0\.0\.1)(:\d+)?/gi, baseUrl);
+            if (src.indexOf('/Images/') > -1)
+              src = src.replace('/Images/', '/images/');
+            if (token && src.indexOf('token=') === -1)
+              src += (src.indexOf('?') > -1 ? '&' : '?') + 'token=' + token;
+            if (src !== orig) imgs[i].src = src;
           }
         }
         window.fixImages = fixImages;
@@ -503,22 +471,18 @@ class _ReaderViewState extends State<ReaderView> {
         var startY    = 0;
         var startPage = 0;
         var dragging  = false;
-        var moved     = false;
 
-        // 🟢 WINDOW LISTENERS (Fixes Dead Zones)
         window.addEventListener('touchstart', function(e) {
           startX    = e.touches[0].clientX;
           startY    = e.touches[0].clientY;
           startPage = Math.round(curX / W());
           dragging  = true;
-          moved     = false;
           window._snapCancel = true;
         }, { passive: true });
 
         window.addEventListener('touchmove', function(e) {
           if (!dragging) return;
-          moved = true;
-          var diff = startX - e.touches[0].clientX;
+          var diff    = startX - e.touches[0].clientX;
           var targetX = startPage * W() + diff;
           setX(Math.max(-W(), Math.min(SW(), targetX)));
         }, { passive: true });
@@ -534,7 +498,7 @@ class _ReaderViewState extends State<ReaderView> {
           var diffX   = startX - clientX;
           var diffY   = startY - clientY;
 
-          if (!moved || (Math.abs(diffX) < 10 && Math.abs(diffY) < 10)) {
+          if (Math.abs(diffX) < 10 && Math.abs(diffY) < 10) {
             post('toggle_controls');
             var validP = Math.max(0, Math.min(Math.ceil((SW()-20)/w)-1, startPage));
             snapTo(validP * w);
@@ -544,72 +508,91 @@ class _ReaderViewState extends State<ReaderView> {
           var maxX = SW() - w;
 
           if (curX < -w * 0.15) {
-             snapTo(-w); 
-             setTimeout(function(){ post('prev_chapter'); }, 300);
-             return;
+            var params = new URLSearchParams(window.location.search);
+            if (params.get('isFirst') !== 'true') {
+              snapTo(-w);
+              setTimeout(function() { post('prev_chapter'); }, 250);
+              return;
+            }
           }
-
           if (curX > maxX + w * 0.15) {
-             snapTo(SW()); 
-             setTimeout(function(){ post('next_chapter'); }, 300);
-             return;
+            snapTo(SW());
+            setTimeout(function() { post('next_chapter'); }, 250);
+            return;
           }
 
-          var threshold = w * 0.15;
           var targetPage = startPage;
-          if (diffX > threshold) targetPage = startPage + 1;
-          else if (diffX < -threshold) targetPage = startPage - 1;
+          if (diffX > 50)       targetPage = startPage + 1;
+          else if (diffX < -50) targetPage = startPage - 1;
 
           var maxPage = Math.ceil((SW() - 20) / w) - 1;
-          targetPage = Math.max(0, Math.min(maxPage, targetPage));
+          targetPage  = Math.max(0, Math.min(maxPage, targetPage));
           snapTo(targetPage * w);
         }
 
-        window.addEventListener('touchend', onTouchEnd, { passive: true });
+        window.addEventListener('touchend',   onTouchEnd, { passive: true });
         window.addEventListener('touchcancel', onTouchEnd, { passive: true });
 
         function snapTo(targetX) {
           window._snapCancel = false;
-          var startV = curX;
-          var dist   = targetX - startV;
+          var from = curX;
+          var dist = targetX - from;
           if (Math.abs(dist) < 1) { setX(targetX); reportProgress(targetX); return; }
-
-          var startT = null;
-          var dur    = Math.min(600, Math.abs(dist) * 0.8);
-
+          var startTime = null;
           function step(ts) {
             if (window._snapCancel) return;
-            if (!startT) startT = ts;
-            var t = Math.min((ts - startT) / dur, 1);
-            var ease = 1 - Math.pow(1 - t, 3);
-            setX(startV + dist * ease);
-            if (t < 1) requestAnimationFrame(step);
+            if (!startTime) startTime = ts;
+            var p    = Math.min((ts - startTime) / 250, 1);
+            var ease = 1 - Math.pow(1 - p, 3);
+            setX(from + dist * ease);
+            if (p < 1) requestAnimationFrame(step);
             else { setX(targetX); reportProgress(targetX); }
           }
           requestAnimationFrame(step);
         }
 
         function reportProgress(x) {
-          var total = SW() - W();
+          var total  = SW() - W();
           var validX = Math.max(0, Math.min(total, x));
           post('progress:' + (total > 0 ? validX / total : 0));
         }
 
         function init() {
+          dragging = false;
           fixImages();
-          setTimeout(fixImages, 300);
+          setTimeout(fixImages, 500);
           var params = new URLSearchParams(window.location.search);
           if (params.get('pos') === 'end') setX(SW() - W());
           else setX(0);
-          setTimeout(function() { post('ready'); }, 200);
+          setTimeout(function() { post('ready'); }, 100);
         }
 
         init();
       })();
     ''';
 
-    final String cssB64 = base64Encode(utf8.encode(rawCss));
+    // Minimal CSS — layout and GPU hints are set via JS (matching reader.js approach)
+    // Only handles: overflow clipping, image sizing, dark mode classes
+    const String rawCss = r'''
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      html {
+        touch-action: none !important;
+        -webkit-user-select: none; user-select: none;
+      }
+      p, h1, h2, h3, h4, h5, h6, li, blockquote {
+        margin-left: 20px !important; margin-right: 20px !important;
+      }
+      img, svg {
+        max-width: calc(100vw - 40px) !important; max-height: 100% !important;
+        object-fit: contain !important; display: block !important; margin: 0 auto !important;
+      }
+      html.dark-mode { background-color: #18122B !important; }
+      body.dark-mode  { color: #E8E0F0 !important; background-color: #18122B !important; }
+      html.dark-mode img { opacity: 0.85 !important; }
+    ''';
+
     final String jsB64 = base64Encode(utf8.encode(rawJs));
+    final String cssB64 = base64Encode(utf8.encode(rawCss));
 
     _webViewController?.runJavaScript('''
       window._tok  = "$token";

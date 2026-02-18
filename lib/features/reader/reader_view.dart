@@ -339,7 +339,7 @@ class _ReaderViewState extends State<ReaderView> {
           onPageFinished: (url) {
             if (!_viewModel.isPdf) {
               if (widget.book.isLocal) {
-                // Local Books: CSS/JS is on disk.
+                // Local Books
                 _applyTheme();
                 _webViewController?.runJavaScript(
                   'if(window.fixImages) window.fixImages();',
@@ -352,7 +352,7 @@ class _ReaderViewState extends State<ReaderView> {
                   if (mounted) setState(() => _isLoading = false);
                 });
               } else {
-                // Cloud Books: Inject JS/CSS
+                // Cloud Books
                 _injectAssets();
               }
             }
@@ -403,15 +403,46 @@ class _ReaderViewState extends State<ReaderView> {
     final token = AuthService().token ?? '';
     final apiBaseUrl = ApiService.baseUrl;
 
-    // Mirrors reader.js exactly — same GPU hints, same passive touch, same snap logic.
-    // Only difference: image fixer uses _base URL replacement instead of localhost swap.
+    // 🟢 UPDATED CSS: Includes BODY font styling to match Local Reader
+    const String rawCss = r'''
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      html {
+        touch-action: none !important;
+        -webkit-user-select: none; user-select: none;
+        background-color: #ffffff;
+      }
+      body {
+        border: none !important;
+        /* Typography - Matches Local Reader */
+        font-family: sans-serif !important; 
+        font-size: 18px !important;
+        line-height: 1.6 !important; 
+        text-align: justify;
+        
+        /* GPU Hints */
+        will-change: transform;
+        -webkit-backface-visibility: hidden; backface-visibility: hidden;
+      }
+      p, h1, h2, h3, h4, h5, h6, li, blockquote {
+        margin-left: 20px !important; margin-right: 20px !important;
+      }
+      img, svg {
+        max-width: calc(100vw - 40px) !important; max-height: 100% !important;
+        object-fit: contain !important; display: block !important; margin: 0 auto !important;
+      }
+      html.dark-mode { background-color: #18122B !important; }
+      body.dark-mode  { color: #E8E0F0 !important; background-color: #18122B !important; }
+      html.dark-mode img { opacity: 0.85 !important; }
+    ''';
+
+    // 🟢 JS: Same as before (The smooth, functional version)
     const String rawJs = r'''
       (function() {
         function post(msg) { if (window.PrintReader) window.PrintReader.postMessage(msg); }
         function W()  { return document.documentElement.clientWidth || window.innerWidth; }
         function SW() { return document.body.scrollWidth; }
 
-        // Mirror reader.js: set GPU hints directly on body via JS
+        // Layout via JS (Matches Reader.js)
         var s = document.body.style;
         s.height              = (window.innerHeight - 80) + 'px';
         s.width               = '100vw';
@@ -420,10 +451,10 @@ class _ReaderViewState extends State<ReaderView> {
         s.columnWidth         = '100vw';
         s.columnGap           = '0';
         s.columnFill          = 'auto';
+        s.overflow            = 'visible';
         s.willChange          = 'transform';
         s.webkitBackfaceVisibility = 'hidden';
         s.backfaceVisibility  = 'hidden';
-        s.overflow            = 'visible';
 
         document.documentElement.style.overflow = 'hidden';
         document.documentElement.style.height   = '100vh';
@@ -443,11 +474,9 @@ class _ReaderViewState extends State<ReaderView> {
           document.body.classList[fn]('dark-mode');
         };
 
-        window.scrollToPercent = function(percent) {
-          var w      = W();
-          var total  = SW() - w;
-          var target = Math.round((total * percent) / w) * w;
-          setX(target);
+        window.scrollToPercent = function(pct) {
+          var total = SW() - W();
+          setX(pct * total);
         };
 
         function fixImages() {
@@ -455,14 +484,13 @@ class _ReaderViewState extends State<ReaderView> {
           var baseUrl = window._base || '';
           var imgs    = document.getElementsByTagName('img');
           for (var i = 0; i < imgs.length; i++) {
-            var src = imgs[i].src, orig = src;
-            if (baseUrl && (src.indexOf('localhost') > -1 || src.indexOf('127.0.0.1') > -1))
-              src = src.replace(/http:\/\/(localhost|127\.0\.0\.1)(:\d+)?/gi, baseUrl);
-            if (src.indexOf('/Images/') > -1)
-              src = src.replace('/Images/', '/images/');
-            if (token && src.indexOf('token=') === -1)
-              src += (src.indexOf('?') > -1 ? '&' : '?') + 'token=' + token;
-            if (src !== orig) imgs[i].src = src;
+            var s = imgs[i].src, orig = s;
+            if (baseUrl && (s.indexOf('localhost') > -1 || s.indexOf('127.0.0.1') > -1))
+              s = s.replace(/http:\/\/(localhost|127\.0\.0\.1)(:\d+)?/gi, baseUrl);
+            if (s.indexOf('/Images/') > -1) s = s.replace('/Images/', '/images/');
+            if (token && s.indexOf('token=') === -1)
+              s += (s.indexOf('?') > -1 ? '&' : '?') + 'token=' + token;
+            if (s !== orig) imgs[i].src = s;
           }
         }
         window.fixImages = fixImages;
@@ -482,7 +510,7 @@ class _ReaderViewState extends State<ReaderView> {
 
         window.addEventListener('touchmove', function(e) {
           if (!dragging) return;
-          var diff    = startX - e.touches[0].clientX;
+          var diff = startX - e.touches[0].clientX;
           var targetX = startPage * W() + diff;
           setX(Math.max(-W(), Math.min(SW(), targetX)));
         }, { passive: true });
@@ -569,26 +597,6 @@ class _ReaderViewState extends State<ReaderView> {
 
         init();
       })();
-    ''';
-
-    // Minimal CSS — layout and GPU hints are set via JS (matching reader.js approach)
-    // Only handles: overflow clipping, image sizing, dark mode classes
-    const String rawCss = r'''
-      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-      html {
-        touch-action: none !important;
-        -webkit-user-select: none; user-select: none;
-      }
-      p, h1, h2, h3, h4, h5, h6, li, blockquote {
-        margin-left: 20px !important; margin-right: 20px !important;
-      }
-      img, svg {
-        max-width: calc(100vw - 40px) !important; max-height: 100% !important;
-        object-fit: contain !important; display: block !important; margin: 0 auto !important;
-      }
-      html.dark-mode { background-color: #18122B !important; }
-      body.dark-mode  { color: #E8E0F0 !important; background-color: #18122B !important; }
-      html.dark-mode img { opacity: 0.85 !important; }
     ''';
 
     final String jsB64 = base64Encode(utf8.encode(rawJs));

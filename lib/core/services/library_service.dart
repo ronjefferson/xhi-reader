@@ -80,7 +80,6 @@ class LibraryService {
           ? DateTime.fromMillisecondsSinceEpoch(lastReadMillis)
           : null;
 
-      // Check for virtual rename alias
       final customTitle = prefs.getString('custom_title_${book.id}');
 
       updatedBooks.add(
@@ -105,7 +104,7 @@ class LibraryService {
     final Set<String> seenPaths = {};
     List<BookModel> books = [];
 
-    // 1. Scan Public Downloads
+    // 1. Scan Public Downloads (Auto-Scan)
     final publicBooks = await _scanPublicDownloads(
       prefs,
       seenPaths,
@@ -113,11 +112,10 @@ class LibraryService {
     );
     books.addAll(publicBooks);
 
-    // 2. Scan App Documents
+    // 2. Scan App Documents (Internal Storage for Imported Books)
     final privateBooks = await _scanAppDocuments(prefs, seenPaths);
     books.addAll(privateBooks);
 
-    // Apply Virtual Names and Final Sort
     List<BookModel> processedBooks = [];
     for (var b in books) {
       final customTitle = prefs.getString('custom_title_${b.id}');
@@ -125,11 +123,9 @@ class LibraryService {
     }
 
     processedBooks.sort((a, b) {
-      // 🟢 FIX: Books without lastRead go to the END
       if (a.lastRead == null && b.lastRead == null) return 0;
-      if (a.lastRead == null) return 1; // a goes to end
-      if (b.lastRead == null) return -1; // b goes to end
-      // Most recent first (descending)
+      if (a.lastRead == null) return 1;
+      if (b.lastRead == null) return -1;
       return b.lastRead!.compareTo(a.lastRead!);
     });
 
@@ -138,6 +134,9 @@ class LibraryService {
   }
 
   // --- SCANNERS ---
+
+  // 🟢 SCANNER 1: PUBLIC DOWNLOADS (Auto-Scan)
+  // FIXED: Only scans EPUBs. Ignores PDFs.
   Future<List<BookModel>> _scanPublicDownloads(
     SharedPreferences prefs,
     Set<String> seenPaths,
@@ -157,7 +156,7 @@ class LibraryService {
           if (entity is File) {
             final ext = p.extension(entity.path).toLowerCase();
 
-            // 🟢 ONLY SCAN EPUB FILES
+            // 🟢 FIX: RESTRICT TO EPUB ONLY FOR AUTO-SCAN
             if (ext != '.epub') continue;
 
             if (seenPaths.contains(entity.path)) continue;
@@ -189,11 +188,8 @@ class LibraryService {
             }
 
             if (needsProcessing || forceRefresh) {
-              if (ext == '.epub') {
-                await _extractEpubCover(entity, coverFile);
-              } else {
-                await _generatePdfCover(entity, coverFile);
-              }
+              // Only EPUB extraction needed here
+              await _extractEpubCover(entity, coverFile);
             }
 
             final lastReadMillis = prefs.getInt('last_read_$bookId');
@@ -221,6 +217,8 @@ class LibraryService {
     return found;
   }
 
+  // 🟢 SCANNER 2: INTERNAL STORAGE (Imported Books)
+  // Must allow PDF to find books you manually imported.
   Future<List<BookModel>> _scanAppDocuments(
     SharedPreferences prefs,
     Set<String> seenPaths,
@@ -241,8 +239,8 @@ class LibraryService {
           for (var f in folderFiles) {
             if (f is File) {
               final ext = p.extension(f.path).toLowerCase();
-              // 🟢 ONLY SCAN EPUB FILES
-              if (ext == '.epub') bookFile = f;
+              // 🟢 ALLOW BOTH: This finds the files you manually imported
+              if (ext == '.epub' || ext == '.pdf') bookFile = f;
               if (p.basename(f.path).contains('cover')) coverFile = f;
             }
           }
@@ -278,10 +276,11 @@ class LibraryService {
   }
 
   // --- EXPLICIT IMPORT ---
+  // Allows picking both EPUB and PDF
   Future<void> importPdf() async {
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['epub'], // 🟢 ONLY EPUB
+      allowedExtensions: ['epub', 'pdf'], // 🟢 User picks explicitly
     );
 
     if (result != null && result.files.single.path != null) {
@@ -296,13 +295,18 @@ class LibraryService {
       }
 
       final ext = p.extension(originalFile.path).toLowerCase();
+      // Copy the file to internal storage
       final savedFile = await originalFile.copy(
         '${bookDataDir.path}/$fileName$ext',
       );
       final coverFile = File('${bookDataDir.path}/cover.png');
 
-      // 🟢 ONLY EPUB
-      await _extractEpubCover(savedFile, coverFile);
+      // 🟢 Generate cover based on type
+      if (ext == '.epub') {
+        await _extractEpubCover(savedFile, coverFile);
+      } else if (ext == '.pdf') {
+        await _generatePdfCover(savedFile, coverFile);
+      }
     }
   }
 
@@ -388,19 +392,16 @@ class LibraryService {
     }
   }
 
-  // 🟢 FIXED DELETE FUNCTION
   Future<bool> deleteBook(BookModel book) async {
     try {
       if (book.filePath != null) {
         final file = File(book.filePath!);
 
-        // Delete the actual book file
         if (await file.exists()) {
           await file.delete();
           debugPrint("Deleted book file: ${file.path}");
         }
 
-        // Clean up the cover/metadata folder in app directory
         final fileName = p.basenameWithoutExtension(file.path);
         final bookId = fileName.replaceAll(RegExp(r'\s+'), '_');
         final appDataDir = await _getAppDataDirectory();
@@ -411,7 +412,6 @@ class LibraryService {
           debugPrint("Deleted cover directory: ${coverDir.path}");
         }
 
-        // Clean up SharedPreferences
         final prefs = await SharedPreferences.getInstance();
         await prefs.remove('last_chapter_${book.id}');
         await prefs.remove('last_progress_${book.id}');
@@ -427,13 +427,11 @@ class LibraryService {
     return false;
   }
 
-  // Rename book (virtual only)
   Future<void> renameBookVirtual(String bookId, String newTitle) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('custom_title_$bookId', newTitle);
   }
 
-  // Helper for Sync Indicators
   bool isBookDownloaded(String onlineTitle) {
     if (_loadedBooks.isEmpty) return false;
     final cleanOnline = _normalize(onlineTitle);
@@ -443,7 +441,6 @@ class LibraryService {
   }
 
   String _normalize(String input) {
-    // Aggressive normalization to match "Book Name.pdf" with "Book Name"
     var text = input.toLowerCase();
     text = text.replaceAll('.pdf', '').replaceAll('.epub', '');
     return text.replaceAll(RegExp(r'[^a-z0-9]'), '');

@@ -135,20 +135,20 @@ flutter:
 flutter_launcher_icons:
   android: "launcher_icon"
   ios: true
-  image_path: "assets/icon.jpg"
+  image_path: "assets/icon.png"
   min_sdk_android: 21 # standard configuration
   # 🟢 CHANGE THE COLOR HERE:
   adaptive_icon_background: "#000000" # Put your Hex Color here
   
   # Ensure your foreground (logo) is set here too for the layering to work
-  adaptive_icon_foreground: "assets/icon.jpg"
+  adaptive_icon_foreground: "assets/icon.png"
 
 flutter_native_splash:
   color: "#000000"                # Background color (Hex code)
-  image: "assets/icon.jpg"      # Path to your logo
+  image: "assets/icon.png"      # Path to your logo
   
   # Android 12+ specific (required because Android 12 changed splash screens)
   android_12:
-    image: "assets/icon.jpg"
+    image: "assets/icon.png"
     color: "#000000"
     icon_background_color: "#000000"

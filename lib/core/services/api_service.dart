@@ -4,9 +4,7 @@ import 'auth_service.dart';
 import '../../models/book_model.dart';
 
 class ApiService {
-  // Use 10.0.2.2 for Android Emulator, otherwise localhost or your IP
   static const String _baseUrl = "http://10.0.2.2:8000";
-  //static const String _baseUrl = "https://ad52-5-38-45-56.ngrok-free.app";
   static String get baseUrl => _baseUrl;
 
   static final ApiService _instance = ApiService._internal();

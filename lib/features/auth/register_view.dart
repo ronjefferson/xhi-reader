@@ -58,7 +58,6 @@ class _RegisterViewState extends State<RegisterView> {
 
   @override
   Widget build(BuildContext context) {
-    // 🟢 Use Theme colors
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
@@ -73,7 +72,6 @@ class _RegisterViewState extends State<RegisterView> {
         bottom: false,
         child: CustomScrollView(
           slivers: [
-            // 1. HEADER
             SliverToBoxAdapter(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -123,13 +121,11 @@ class _RegisterViewState extends State<RegisterView> {
                 ],
               ),
             ),
-
-            // 2. SHEET (Uses theme.cardColor)
             SliverFillRemaining(
               hasScrollBody: false,
               child: Container(
                 decoration: BoxDecoration(
-                  color: theme.cardColor, // 🟢 Dynamic Color
+                  color: theme.cardColor,
                   borderRadius: const BorderRadius.vertical(
                     top: Radius.circular(30),
                   ),
@@ -141,8 +137,6 @@ class _RegisterViewState extends State<RegisterView> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       const SizedBox(height: 20),
-
-                      // USERNAME
                       TextFormField(
                         controller: _usernameController,
                         decoration: const InputDecoration(
@@ -154,10 +148,7 @@ class _RegisterViewState extends State<RegisterView> {
                             ? 'Enter a username'
                             : null,
                       ),
-
                       const SizedBox(height: 20),
-
-                      // PASSWORD
                       TextFormField(
                         controller: _passwordController,
                         obscureText: !_isPasswordVisible,
@@ -180,10 +171,7 @@ class _RegisterViewState extends State<RegisterView> {
                             ? 'Min 6 characters'
                             : null,
                       ),
-
                       const SizedBox(height: 40),
-
-                      // BUTTON
                       SizedBox(
                         height: 56,
                         child: ElevatedButton(
@@ -201,9 +189,7 @@ class _RegisterViewState extends State<RegisterView> {
                                 ),
                         ),
                       ),
-
                       const SizedBox(height: 24),
-
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [

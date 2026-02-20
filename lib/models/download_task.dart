@@ -16,7 +16,7 @@ class DownloadTask {
   double progress;
   int receivedBytes;
   int totalBytes;
-  DownloadStatus status; // Uses the Enum here
+  DownloadStatus status;
   String? errorMessage;
   Function()? onCancel;
 

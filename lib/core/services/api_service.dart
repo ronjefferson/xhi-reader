@@ -11,7 +11,6 @@ class ApiService {
   factory ApiService() => _instance;
   ApiService._internal();
 
-  // 🟢 HEADERS HELPER
   Map<String, String> get authHeaders {
     final headers = {
       'ngrok-skip-browser-warning': 'true',
@@ -24,7 +23,6 @@ class ApiService {
     return headers;
   }
 
-  // --- 1. FETCH BOOKS (GET /books/) ---
   Future<List<BookModel>> fetchUserBooks() async {
     final url = Uri.parse('$_baseUrl/books/');
     final response = await _authenticatedRequest(
@@ -34,7 +32,6 @@ class ApiService {
     if (response.statusCode == 200) {
       final dynamic decoded = jsonDecode(response.body);
 
-      // Handle List [...]
       if (decoded is List) {
         return decoded
             .map(
@@ -42,9 +39,7 @@ class ApiService {
                   BookModel.fromJson(json as Map<String, dynamic>, _baseUrl),
             )
             .toList();
-      }
-      // Handle {"books": [...]}
-      else if (decoded is Map && decoded.containsKey('books')) {
+      } else if (decoded is Map && decoded.containsKey('books')) {
         return (decoded['books'] as List)
             .map(
               (json) =>
@@ -59,18 +54,15 @@ class ApiService {
     }
   }
 
-  // --- 2. DELETE BOOK (DELETE /books/{id}) ---
   Future<bool> deleteBook(int bookId) async {
     final url = Uri.parse('$_baseUrl/books/$bookId');
     final response = await _authenticatedRequest(
       (headers) => http.delete(url, headers: headers),
     );
 
-    // 🟢 IMPROVED: Accept both 200 and 204 (No Content)
     return response.statusCode == 200 || response.statusCode == 204;
   }
 
-  // --- 3. MANIFEST (GET /books/{id}/manifest) ---
   Future<Map<String, dynamic>?> fetchManifest(int bookId) async {
     final url = Uri.parse('$_baseUrl/books/$bookId/manifest');
     final response = await _authenticatedRequest(
@@ -83,7 +75,6 @@ class ApiService {
     return null;
   }
 
-  // --- 4. GET PROGRESS (GET /books/{id}/progress) ---
   Future<Map<String, dynamic>?> getReadingProgress(int bookId) async {
     final url = Uri.parse('$_baseUrl/books/$bookId/progress');
     final response = await _authenticatedRequest(
@@ -93,12 +84,11 @@ class ApiService {
     if (response.statusCode == 200) {
       return jsonDecode(response.body) as Map<String, dynamic>;
     } else if (response.statusCode == 404) {
-      return null; // No progress saved yet
+      return null;
     }
     return null;
   }
 
-  // --- 5. UPDATE PROGRESS (PUT /books/{id}/progress) ---
   Future<void> updateReadingProgress(
     int bookId,
     int chapterIndex,
@@ -106,7 +96,6 @@ class ApiService {
   ) async {
     final url = Uri.parse('$_baseUrl/books/$bookId/progress');
 
-    // 🟢 PUT Method (Matches API Docs)
     await _authenticatedRequest(
       (headers) => http.put(
         url,
@@ -119,7 +108,6 @@ class ApiService {
     );
   }
 
-  // 🟢 AUTH HELPER
   Future<http.Response> _authenticatedRequest(
     Future<http.Response> Function(Map<String, String>) request,
   ) async {

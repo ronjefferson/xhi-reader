@@ -78,16 +78,13 @@ class _LoginViewState extends State<LoginView> {
 
   @override
   Widget build(BuildContext context) {
-    // 🟢 Use Theme colors defined in main.dart
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    // In Light mode use Primary Color for header, in Dark mode use Background color
     final headerBgColor = isDark
         ? theme.scaffoldBackgroundColor
         : theme.primaryColor;
 
-    // Links should be Blue in dark mode for visibility, Primary in light mode
     final linkColor = isDark ? Colors.blueAccent : theme.primaryColor;
 
     return Scaffold(
@@ -96,7 +93,6 @@ class _LoginViewState extends State<LoginView> {
         bottom: false,
         child: CustomScrollView(
           slivers: [
-            // 1. HEADER
             SliverToBoxAdapter(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -146,14 +142,11 @@ class _LoginViewState extends State<LoginView> {
                 ],
               ),
             ),
-
-            // 2. SHEET (Uses theme.cardColor)
             SliverFillRemaining(
               hasScrollBody: false,
               child: Container(
                 decoration: BoxDecoration(
-                  color: theme
-                      .cardColor, // 🟢 Automatically Darkest in Dark Mode / White in Light
+                  color: theme.cardColor,
                   borderRadius: const BorderRadius.vertical(
                     top: Radius.circular(30),
                   ),
@@ -163,8 +156,6 @@ class _LoginViewState extends State<LoginView> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     const SizedBox(height: 20),
-
-                    // USERNAME (Pickups up inputDecorationTheme from main.dart)
                     TextField(
                       controller: _usernameController,
                       decoration: const InputDecoration(
@@ -172,10 +163,7 @@ class _LoginViewState extends State<LoginView> {
                         prefixIcon: Icon(Icons.person_outline),
                       ),
                     ),
-
                     const SizedBox(height: 20),
-
-                    // PASSWORD
                     TextField(
                       controller: _passwordController,
                       obscureText: !_isPasswordVisible,
@@ -194,10 +182,7 @@ class _LoginViewState extends State<LoginView> {
                         ),
                       ),
                     ),
-
                     const SizedBox(height: 40),
-
-                    // BUTTON (Picks up elevatedButtonTheme from main.dart)
                     SizedBox(
                       height: 56,
                       child: ElevatedButton(
@@ -213,9 +198,7 @@ class _LoginViewState extends State<LoginView> {
                               ),
                       ),
                     ),
-
                     const SizedBox(height: 24),
-
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [

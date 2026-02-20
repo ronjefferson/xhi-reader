@@ -1,15 +1,14 @@
 enum UploadStatus { pending, uploading, completed, failed, canceled }
 
 class UploadTask {
-  final String id; // Unique ID (usually file path)
+  final String id;
   final String filePath;
   final String title;
 
-  double progress; // 0.0 to 1.0
+  double progress;
   UploadStatus status;
   String? errorMessage;
 
-  // We need a way to cancel the upload
   void Function()? onCancel;
 
   UploadTask({

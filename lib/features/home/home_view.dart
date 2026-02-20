@@ -89,8 +89,6 @@ class _HomeViewState extends State<HomeView>
     if (!silent && !isRefresh) setState(() => isLoadingOnline = true);
     try {
       final loaded = await ApiService().fetchUserBooks();
-
-      // 🟢 Sort cloud books by recency (last read)
       final sortedBooks = await LibraryService().sortBooksByRecent(loaded);
 
       if (mounted) {
@@ -129,7 +127,6 @@ class _HomeViewState extends State<HomeView>
         context,
         MaterialPageRoute(builder: (_) => ReaderView(book: book)),
       ).then((_) {
-        // 🟢 Re-sort local books when returning from reader
         _loadLocalBooks(isRefresh: true);
       });
       LibraryService().updateLastRead(book.id);
@@ -138,7 +135,6 @@ class _HomeViewState extends State<HomeView>
         context,
         MaterialPageRoute(builder: (_) => ReaderView(book: book)),
       ).then((_) {
-        // 🟢 Re-sort cloud books when returning from reader
         _loadOnlineBooks(silent: true);
       });
       LibraryService().updateLastRead(book.id);
@@ -173,7 +169,7 @@ class _HomeViewState extends State<HomeView>
                   width: 60,
                   height: 90,
                   decoration: BoxDecoration(
-                    color: Colors.white, // 🟢 White background
+                    color: Colors.white,
                     borderRadius: BorderRadius.circular(4),
                   ),
                   clipBehavior: Clip.antiAlias,
@@ -244,18 +240,15 @@ class _HomeViewState extends State<HomeView>
                     },
             ),
 
-            // Delete option
             ListTile(
               leading: const Icon(Icons.delete, color: Colors.red),
               title: const Text("Delete"),
               onTap: () async {
                 Navigator.pop(context);
                 if (isLocal) {
-                  // Delete local book
                   await LibraryService().deleteBook(book);
                   _loadLocalBooks(isRefresh: true);
                 } else {
-                  // Delete cloud book
                   final confirmed = await showDialog<bool>(
                     context: context,
                     builder: (context) => AlertDialog(
@@ -624,10 +617,7 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
   @override
   bool get wantKeepAlive => true;
 
-  // Track books whose progress overlay should be hidden
   final Set<String> _hiddenOverlays = {};
-
-  // 🟢 FIX: Cache progress values to prevent flickering
   final Map<String, double> _progressCache = {};
   final Map<String, bool> _completionScheduled = {};
 
@@ -645,7 +635,6 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
     return text.replaceAll(RegExp(r'[^a-z0-9]'), '');
   }
 
-  // 🟢 FIXED: Check upload progress without flickering
   double _getUploadProgress(BookModel book) {
     final bookKey = book.id;
 
@@ -658,10 +647,8 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
       final task = tasks.firstWhere((t) => t.filePath == book.filePath);
       final currentProgress = task.progress;
 
-      // 🟢 Update cache with actual progress
       _progressCache[bookKey] = currentProgress;
 
-      // Schedule hiding after completion (only once)
       if (currentProgress >= 1.0 &&
           !_hiddenOverlays.contains(bookKey) &&
           !_completionScheduled.containsKey(bookKey)) {
@@ -679,20 +666,17 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
 
       return currentProgress;
     } catch (e) {
-      // 🟢 FIX: Return cached progress if task not found (prevents flicker)
       if (_progressCache.containsKey(bookKey)) {
         final cachedProgress = _progressCache[bookKey]!;
-        // Only return cache if it's in progress (not at 0 or 1)
         if (cachedProgress > 0.0 && cachedProgress < 1.0) {
           return cachedProgress;
         }
       }
       _progressCache.remove(bookKey);
-      return -1.0; // Not uploading
+      return -1.0;
     }
   }
 
-  // 🟢 FIXED: Check download progress without flickering
   double _getDownloadProgress(BookModel book) {
     final bookKey = book.id;
 
@@ -710,10 +694,8 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
 
       final currentProgress = task.progress;
 
-      // 🟢 Update cache with actual progress
       _progressCache[bookKey] = currentProgress;
 
-      // Schedule hiding after completion (only once)
       if (currentProgress >= 1.0 &&
           !_hiddenOverlays.contains(bookKey) &&
           !_completionScheduled.containsKey(bookKey)) {
@@ -731,16 +713,14 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
 
       return currentProgress;
     } catch (e) {
-      // 🟢 FIX: Return cached progress if task not found (prevents flicker)
       if (_progressCache.containsKey(bookKey)) {
         final cachedProgress = _progressCache[bookKey]!;
-        // Only return cache if it's in progress (not at 0 or 1)
         if (cachedProgress > 0.0 && cachedProgress < 1.0) {
           return cachedProgress;
         }
       }
       _progressCache.remove(bookKey);
-      return -1.0; // Not downloading
+      return -1.0;
     }
   }
 
@@ -772,7 +752,6 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
           (b) => _normalizeTitle(_getOriginalFilename(b)) == normalizedFilename,
         );
 
-        // Get progress
         final uploadProgress = widget.isLocal ? _getUploadProgress(book) : -1.0;
         final downloadProgress = !widget.isLocal
             ? _getDownloadProgress(book)
@@ -793,7 +772,7 @@ class _KeepAliveBookGridState extends State<KeepAliveBookGrid>
                   children: [
                     Container(
                       decoration: BoxDecoration(
-                        color: Colors.white, // 🟢 White background
+                        color: Colors.white,
                         borderRadius: BorderRadius.circular(8),
                       ),
                       clipBehavior: Clip.antiAlias,

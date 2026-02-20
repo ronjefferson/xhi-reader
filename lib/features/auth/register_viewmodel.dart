@@ -13,12 +13,12 @@ class RegisterViewModel extends ChangeNotifier {
     final error = await AuthService().register(email, password);
 
     isLoading = false;
-    
+
     if (error == null) {
-      // Success
+      // Registration succeeded
       return true;
     } else {
-      // Failure
+      // Registration failed
       errorMessage = error;
       notifyListeners();
       return false;

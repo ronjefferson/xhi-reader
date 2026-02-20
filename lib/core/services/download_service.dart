@@ -19,10 +19,7 @@ class DownloadService extends ChangeNotifier {
 
   VoidCallback? onBookDownloaded;
 
-  // --- PUBLIC ACTIONS ---
-
   void addToQueue(int bookId, String title, String coverUrl, String savePath) {
-    // Remove old tasks
     _tasks.removeWhere(
       (t) =>
           t.bookId == bookId &&
@@ -30,7 +27,6 @@ class DownloadService extends ChangeNotifier {
               t.status == DownloadStatus.failed),
     );
 
-    // Prevent duplicates
     if (_tasks.any(
       (t) =>
           t.bookId == bookId &&
@@ -89,12 +85,8 @@ class DownloadService extends ChangeNotifier {
     try {
       final file = File(path);
       if (file.existsSync()) file.deleteSync();
-    } catch (e) {
-      /* ignore */
-    }
+    } catch (e) {}
   }
-
-  // --- INTERNAL ENGINE ---
 
   void _processQueue() {
     int activeCount = _tasks
@@ -106,9 +98,7 @@ class DownloadService extends ChangeNotifier {
           (t) => t.status == DownloadStatus.pending,
         );
         _startDownload(nextTask);
-      } catch (e) {
-        /* Queue Empty */
-      }
+      } catch (e) {}
     }
   }
 
@@ -132,7 +122,6 @@ class DownloadService extends ChangeNotifier {
 
         final response = await client.send(request);
 
-        // 🟢 FIX: 401 RETRY LOGIC (Before opening file)
         if (response.statusCode == 401 && !retryMode) {
           print("DownloadService: Token expired. Refreshing...");
           await response.stream.drain();
@@ -146,20 +135,16 @@ class DownloadService extends ChangeNotifier {
           }
         }
 
-        // 🟢 FIX: STRICT STATUS CHECK (Prevents Corrupt Files)
-        // If server sends 404 or 500, we must fail.
         if (response.statusCode != 200) {
           throw "Server error: ${response.statusCode}";
         }
 
-        // 🟢 FIX: SAFE WRITE
         task.totalBytes = response.contentLength ?? -1;
         task.receivedBytes = 0;
         task.progress = 0.0;
 
         final file = File(task.savePath);
 
-        // Ensure folder exists
         if (!file.parent.existsSync()) {
           file.parent.createSync(recursive: true);
         }
@@ -198,7 +183,6 @@ class DownloadService extends ChangeNotifier {
       task.errorMessage = "Download Error";
       notifyListeners();
 
-      // Cleanup corrupt file
       _cleanupFile(task.savePath);
     } finally {
       _processQueue();

@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'dart:convert'; // REQUIRED for utf8.decode
+import 'dart:convert';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:archive/archive.dart';
 import 'package:xml/xml.dart';
@@ -21,7 +21,6 @@ class EpubService {
   Future<void> startServer(String appDocPath) async {
     if (_server != null) return;
 
-    // 1. Pre-load assets
     _cachedJs = await rootBundle.loadString('assets/reader.js');
     _cachedCss = await rootBundle.loadString('assets/reader.css');
 
@@ -36,27 +35,20 @@ class EpubService {
             final response = await innerHandler(request);
             final path = request.url.path.toLowerCase();
 
-            // 2. INTERCEPT HTML FILES
             if (response.statusCode == 200 &&
                 (path.endsWith('.html') || path.endsWith('.xhtml'))) {
               final bodyBytes = await response.read().toList();
               final allBytes = bodyBytes.expand((x) => x).toList();
 
-              // --- THE FIX ---
-              // We force UTF-8 decoding here.
-              // This fixes the "â€œ" garbage characters before they leave the server.
               final originalBody = utf8.decode(allBytes, allowMalformed: true);
-              // ----------------
 
               final String cssTag = '<style>$_cachedCss</style>';
               final String jsTag = '<script>$_cachedJs</script>';
-              // Viewport meta is critical for mobile scaling
               final String metaTag =
                   '<meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">';
 
               String modified = originalBody;
 
-              // A. Inject Head Items (Meta + CSS)
               if (modified.contains('<head>')) {
                 modified = modified.replaceFirst(
                   '<head>',
@@ -66,7 +58,6 @@ class EpubService {
                 modified = '<head>$metaTag$cssTag</head>$modified';
               }
 
-              // B. Wrap Body with div id="viewer" (For your scrolling logic)
               if (modified.contains('<body')) {
                 modified = modified.replaceFirstMapped(
                   RegExp(r'<body[^>]*>', caseSensitive: false),
@@ -86,7 +77,6 @@ class EpubService {
                 modified,
                 headers: {
                   ...response.headers,
-                  // C. Tell WebView this is definitely UTF-8
                   'content-type': 'text/html; charset=utf-8',
                 },
               );
@@ -103,8 +93,6 @@ class EpubService {
       print("Error starting server: $e");
     }
   }
-
-  // --- STANDARD EPUB PARSING (Unchanged) ---
 
   Future<List<String>> getSpineUrls(
     File epubFile,
@@ -139,7 +127,6 @@ class EpubService {
     try {
       final file = File(localPath);
       if (!await file.exists()) return 1;
-      // Also ensure page counting reads UTF-8
       String content = await file.readAsString(encoding: utf8);
 
       bool hasImages =
@@ -198,13 +185,15 @@ class EpubService {
       final spinePaths = <String>[];
       for (var itemref in opfXml.findAllElements('itemref')) {
         final idref = itemref.getAttribute('idref');
-        if (idref != null && manifest.containsKey(idref))
+        if (idref != null && manifest.containsKey(idref)) {
           spinePaths.add(manifest[idref]!);
+        }
       }
 
       String rootFolder = "";
-      if (opfPath.contains('/'))
+      if (opfPath.contains('/')) {
         rootFolder = opfPath.substring(0, opfPath.lastIndexOf('/'));
+      }
 
       return {'rootFolder': rootFolder, 'spinePaths': spinePaths};
     } catch (e) {

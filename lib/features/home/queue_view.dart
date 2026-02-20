@@ -55,9 +55,6 @@ class _QueueViewState extends State<QueueView>
   }
 }
 
-// -----------------------------------------------------------------------------
-// 📥 DOWNLOAD LIST
-// -----------------------------------------------------------------------------
 class DownloadList extends StatelessWidget {
   const DownloadList({super.key});
 
@@ -77,7 +74,7 @@ class DownloadList extends StatelessWidget {
           itemCount: tasks.length,
           separatorBuilder: (_, __) => const SizedBox(height: 12),
           itemBuilder: (context, index) {
-            final task = tasks[tasks.length - 1 - index]; // Newest first
+            final task = tasks[tasks.length - 1 - index];
 
             final isDone = task.status == DownloadStatus.completed;
             final isFailed = task.status == DownloadStatus.failed;
@@ -102,9 +99,7 @@ class DownloadList extends StatelessWidget {
               );
             } else {
               return NotificationEntryCard(
-                key: ValueKey(
-                  'download_${task.bookId}_${task.status}',
-                ), // 🟢 Unique key
+                key: ValueKey('download_${task.bookId}_${task.status}'),
                 title: task.title,
                 message: isDone ? "Download Completed" : "Download Failed",
                 icon: isDone ? Icons.check_circle : Icons.error,
@@ -119,9 +114,6 @@ class DownloadList extends StatelessWidget {
   }
 }
 
-// -----------------------------------------------------------------------------
-// 📤 UPLOAD LIST
-// -----------------------------------------------------------------------------
 class UploadList extends StatelessWidget {
   const UploadList({super.key});
 
@@ -141,7 +133,7 @@ class UploadList extends StatelessWidget {
           itemCount: tasks.length,
           separatorBuilder: (_, __) => const SizedBox(height: 12),
           itemBuilder: (context, index) {
-            final task = tasks[tasks.length - 1 - index]; // Newest first
+            final task = tasks[tasks.length - 1 - index];
 
             final isDone = task.status == UploadStatus.completed;
             final isFailed = task.status == UploadStatus.failed;
@@ -154,13 +146,11 @@ class UploadList extends StatelessWidget {
                 progress: task.progress,
                 isPaused: false,
                 onPause: null,
-                onCancel: () {}, // Add cancel logic if needed
+                onCancel: () {},
               );
             } else {
               return NotificationEntryCard(
-                key: ValueKey(
-                  'upload_${task.id}_${task.status}',
-                ), // 🟢 Unique key
+                key: ValueKey('upload_${task.id}_${task.status}'),
                 title: task.title,
                 message: isDone
                     ? "Upload Completed"
@@ -177,9 +167,6 @@ class UploadList extends StatelessWidget {
   }
 }
 
-// -----------------------------------------------------------------------------
-// 🟢 PROGRESS ENTRY (Active Tasks)
-// -----------------------------------------------------------------------------
 class ProgressEntryCard extends StatelessWidget {
   final String title;
   final String status;
@@ -203,7 +190,6 @@ class ProgressEntryCard extends StatelessWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    // 🟢 THEME-AWARE COLORS
     final cardColor = isDark ? const Color(0xFF393053) : Colors.white;
     final iconBgColor = isDark ? const Color(0xFF443C68) : Colors.grey[100];
     final iconColor = isDark ? Colors.white70 : Colors.grey;
@@ -290,9 +276,6 @@ class ProgressEntryCard extends StatelessWidget {
   }
 }
 
-// -----------------------------------------------------------------------------
-// 🔵 NOTIFICATION ENTRY (Finished Tasks)
-// -----------------------------------------------------------------------------
 class NotificationEntryCard extends StatefulWidget {
   final String title;
   final String message;
@@ -325,7 +308,6 @@ class _NotificationEntryCardState extends State<NotificationEntryCard> {
   @override
   void initState() {
     super.initState();
-    // Queue entries stay until manually deleted
   }
 
   void _toggleMenu() {
@@ -336,10 +318,8 @@ class _NotificationEntryCardState extends State<NotificationEntryCard> {
     if (_isMenuOpen) setState(() => _isMenuOpen = false);
   }
 
-  // 🟢 FIX: Close menu before deleting
   void _handleDelete() {
     _closeMenu();
-    // Small delay to let animation complete
     Future.delayed(const Duration(milliseconds: 100), () {
       widget.onDelete();
     });
@@ -355,7 +335,6 @@ class _NotificationEntryCardState extends State<NotificationEntryCard> {
         ? availableWidth - _actionAreaWidth
         : availableWidth;
 
-    // 🟢 THEME-AWARE COLORS
     final bgColor = isDark ? const Color(0xFF443C68) : Colors.grey[100];
     final cardColor = isDark ? const Color(0xFF393053) : Colors.white;
     final borderColor = isDark ? const Color(0xFF635985) : Colors.grey.shade300;
@@ -370,7 +349,6 @@ class _NotificationEntryCardState extends State<NotificationEntryCard> {
         child: Stack(
           alignment: Alignment.centerLeft,
           children: [
-            // 1. BACKGROUND ACTIONS LAYER
             Container(
               height: 72,
               width: availableWidth,
@@ -398,8 +376,6 @@ class _NotificationEntryCardState extends State<NotificationEntryCard> {
                 ],
               ),
             ),
-
-            // 2. FOREGROUND CONTENT LAYER
             AnimatedContainer(
               duration: const Duration(milliseconds: 300),
               curve: Curves.easeOutCubic,

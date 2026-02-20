@@ -12,14 +12,12 @@ import '../../core/services/auth_service.dart';
 class ReaderViewModel extends ChangeNotifier {
   final BookModel book;
 
-  // --- State ---
   String? epubUrl;
   String? pdfPath;
   bool isReady = false;
   String? errorMessage;
   bool isPdf = false;
 
-  // --- Navigation (EPUB) ---
   List<String> spine = [];
   List<String> chapterTitles = [];
   int currentChapterIndex = 0;
@@ -27,12 +25,10 @@ class ReaderViewModel extends ChangeNotifier {
   List<int> _cumulativePageCounts = [];
   double _currentChapterProgress = 0.0;
 
-  // --- Navigation (PDF) ---
   PdfDocument? pdfDoc;
   int _pdfCurrentPage = 1;
   int _pdfTotalPages = 1;
 
-  // --- Shared ---
   int _totalBookPages = 1;
   double? requestScrollToProgress;
   int? requestJumpToPage;
@@ -41,7 +37,6 @@ class ReaderViewModel extends ChangeNotifier {
 
   int get totalBookPages => isPdf ? _pdfTotalPages : _totalBookPages;
 
-  // --- INITIALIZATION ---
   Future<void> initializeReader() async {
     try {
       if (book.filePath != null) {
@@ -66,7 +61,6 @@ class ReaderViewModel extends ChangeNotifier {
     }
   }
 
-  // --- MODE 1: PDF (WITH 401 RETRY) ---
   Future<void> _initPdfMode() async {
     if (book.isLocal && book.filePath != null) {
       try {
@@ -83,20 +77,18 @@ class ReaderViewModel extends ChangeNotifier {
       _pdfTotalPages = pdfDoc!.pages.length;
       chapterTitles = [];
 
-      // 🟢 RESTORE PROGRESS (API -> PDF Page)
-      // 1. Check Local Cache first (Priority)
       var savedData = await LibraryService().getLastProgress(
         book.id.toString(),
       );
 
-      // 2. If no local, check Cloud (using int ID)
-      if (savedData == null) {
-        int intId = int.tryParse(book.id.toString()) ?? 0;
-        final cloudData = await ApiService().getReadingProgress(intId);
-        if (cloudData != null) {
-          // Map 'chapter_index' (API) -> Page Number (PDF)
-          savedData = {'chapterIndex': cloudData['chapter_index']};
-        }
+      if (savedData == null && !book.isLocal) {
+        try {
+          int intId = int.tryParse(book.id.toString()) ?? 0;
+          final cloudData = await ApiService().getReadingProgress(intId);
+          if (cloudData != null) {
+            savedData = {'chapterIndex': cloudData['chapter_index']};
+          }
+        } catch (e) {}
       }
 
       if (savedData != null) {
@@ -113,7 +105,6 @@ class ReaderViewModel extends ChangeNotifier {
   }
 
   Future<void> _openCloudPdfWithRetry() async {
-    // 🟢 Matches Docs: GET /books/{id}/download
     final url = '${ApiService.baseUrl}/books/${book.id}/download';
 
     try {
@@ -121,7 +112,6 @@ class ReaderViewModel extends ChangeNotifier {
     } catch (e) {
       if (e.toString().contains('401') ||
           e.toString().contains('Unauthorized')) {
-        print("Reader: Token expired. Refreshing...");
         final success = await AuthService().tryRefreshToken();
         if (success) {
           await _attemptOpenPdf(url);
@@ -136,7 +126,6 @@ class ReaderViewModel extends ChangeNotifier {
 
   Future<void> _attemptOpenPdf(String url) async {
     final token = AuthService().token;
-    print("Streaming PDF from: $url");
 
     pdfDoc = await PdfDocument.openUri(
       Uri.parse(url),
@@ -147,7 +136,6 @@ class ReaderViewModel extends ChangeNotifier {
     );
   }
 
-  // --- MODE 2: LOCAL EPUB ---
   Future<void> _initLocalEpub() async {
     if (book.filePath == null) throw "Local file path missing.";
     final appDocPath = (await getApplicationDocumentsDirectory()).path;
@@ -166,11 +154,9 @@ class ReaderViewModel extends ChangeNotifier {
     _restoreEpubState(savedData);
   }
 
-  // --- MODE 3: ONLINE EPUB ---
   Future<void> _initOnlineEpub() async {
     int id = int.tryParse(book.id.toString()) ?? 0;
 
-    // 🟢 Matches Docs: GET /books/{id}/manifest
     final manifest = await ApiService().fetchManifest(id);
     if (manifest == null) throw "Could not fetch book manifest.";
 
@@ -197,29 +183,52 @@ class ReaderViewModel extends ChangeNotifier {
       if (t.trim().isEmpty) t = "Illustration";
       chapterTitles.add(t);
 
-      int size = chap['sizeBytes'] ?? 2000;
-      int pages = (size / 2000).ceil();
-      if (pages < 1) pages = 1;
-
+      // Start with a placeholder of 1 page per chapter.
+      // The real count will be reported by the WebView after render
+      // via updateChapterPageCount().
+      const int placeholderPages = 1;
       _cumulativePageCounts.add(runningTotal);
-      _chapterPageCounts.add(pages);
-      runningTotal += pages;
+      _chapterPageCounts.add(placeholderPages);
+      runningTotal += placeholderPages;
     }
     _totalBookPages = runningTotal > 0 ? runningTotal : 1;
 
-    // 🟢 RESTORE PROGRESS (API -> EPUB)
-    final cloudData = await ApiService().getReadingProgress(id);
     Map<String, dynamic>? progressData;
-    if (cloudData != null) {
-      progressData = {
-        'chapterIndex': cloudData['chapter_index'], // API Key
-        'progress': cloudData['progress_percent'], // API Key
-      };
-    }
+    try {
+      final cloudData = await ApiService().getReadingProgress(id);
+      if (cloudData != null) {
+        progressData = {
+          'chapterIndex': cloudData['chapter_index'],
+          'progress': cloudData['progress_percent'],
+        };
+      }
+    } catch (e) {}
+
     _restoreEpubState(progressData);
   }
 
-  // --- EPUB HELPERS ---
+  /// Called by the View when the WebView reports its actual rendered page count
+  /// for the current chapter. This replaces the estimated/placeholder value and
+  /// recalculates all cumulative totals from that chapter onward.
+  void updateChapterPageCount(int chapterIndex, int actualPageCount) {
+    if (chapterIndex < 0 || chapterIndex >= _chapterPageCounts.length) return;
+    if (_chapterPageCounts[chapterIndex] == actualPageCount) return;
+
+    _chapterPageCounts[chapterIndex] = actualPageCount;
+
+    // Recalculate cumulative counts from this chapter onward
+    int runningTotal = chapterIndex > 0
+        ? _cumulativePageCounts[chapterIndex]
+        : 0;
+    for (int i = chapterIndex; i < _chapterPageCounts.length; i++) {
+      _cumulativePageCounts[i] = runningTotal;
+      runningTotal += _chapterPageCounts[i];
+    }
+    _totalBookPages = runningTotal > 0 ? runningTotal : 1;
+
+    notifyListeners();
+  }
+
   void _updateUrl(String baseUrl, {bool posEnd = false}) {
     final String v = DateTime.now().millisecondsSinceEpoch.toString();
     String separator = baseUrl.contains('?') ? '&' : '?';
@@ -251,14 +260,12 @@ class ReaderViewModel extends ChangeNotifier {
     }
   }
 
-  // --- SAVE PROGRESS ---
   void saveCurrentProgress() {
     String strId = book.id.toString();
     int intId = int.tryParse(strId) ?? 0;
 
     if (isPdf) {
       LibraryService().saveProgress(strId, _pdfCurrentPage, 0.0);
-      // PDF: chapter_index = page, progress_percent = 0
       ApiService().updateReadingProgress(intId, _pdfCurrentPage, 0.0);
     } else {
       if (book.isLocal) {
@@ -277,7 +284,6 @@ class ReaderViewModel extends ChangeNotifier {
     }
   }
 
-  // --- NAVIGATION (PDF) ---
   void onPdfPageChanged(int page) {
     _pdfCurrentPage = page;
     saveCurrentProgress();
@@ -291,7 +297,6 @@ class ReaderViewModel extends ChangeNotifier {
       notifyListeners();
       saveCurrentProgress();
     } else {
-      // (Epub jump logic matches your previous versions)
       globalPage = globalPage.clamp(1, _totalBookPages);
       for (int i = 0; i < _cumulativePageCounts.length; i++) {
         int start = _cumulativePageCounts[i];
@@ -310,7 +315,6 @@ class ReaderViewModel extends ChangeNotifier {
     }
   }
 
-  // --- NAVIGATION (EPUB) ---
   void updateEpubScrollProgress(double progress) {
     _currentChapterProgress = progress;
     saveCurrentProgress();
@@ -362,7 +366,6 @@ class ReaderViewModel extends ChangeNotifier {
     String bookId,
     String appDocPath,
   ) async {
-    // (Logic unchanged from your working version)
     _chapterPageCounts.clear();
     _cumulativePageCounts.clear();
     chapterTitles.clear();
@@ -373,12 +376,90 @@ class ReaderViewModel extends ChangeNotifier {
       Uri uri = Uri.parse(url);
       String localPath = "$appDocPath${uri.path}";
       int pages = await EpubService().countPagesForChapter(localPath);
-      chapterTitles.add("Chapter ${index + 1}");
+
+      String title = await _extractChapterTitle(localPath, index);
+      chapterTitles.add(title);
+
       _chapterPageCounts.add(pages);
       runningTotal += pages;
       index++;
     }
     _totalBookPages = runningTotal > 0 ? runningTotal : 1;
     notifyListeners();
+  }
+
+  Future<String> _extractChapterTitle(String path, int index) async {
+    try {
+      final file = File(path);
+      if (!await file.exists()) return "Chapter ${index + 1}";
+
+      final content = await file.readAsString();
+
+      final h1Match = RegExp(
+        r'<h1[^>]*>(.*?)</h1>',
+        caseSensitive: false,
+        dotAll: true,
+      ).firstMatch(content);
+      if (h1Match != null) {
+        String text = h1Match
+            .group(1)!
+            .replaceAll(RegExp(r'<[^>]*>'), '')
+            .trim();
+        if (text.isNotEmpty) return _cleanHtmlEntities(text);
+      }
+
+      final h2Match = RegExp(
+        r'<h2[^>]*>(.*?)</h2>',
+        caseSensitive: false,
+        dotAll: true,
+      ).firstMatch(content);
+      if (h2Match != null) {
+        String text = h2Match
+            .group(1)!
+            .replaceAll(RegExp(r'<[^>]*>'), '')
+            .trim();
+        if (text.isNotEmpty) return _cleanHtmlEntities(text);
+      }
+
+      final titleMatch = RegExp(
+        r'<title[^>]*>(.*?)</title>',
+        caseSensitive: false,
+        dotAll: true,
+      ).firstMatch(content);
+      if (titleMatch != null) {
+        String text = titleMatch
+            .group(1)!
+            .replaceAll(RegExp(r'<[^>]*>'), '')
+            .trim();
+        if (text.isNotEmpty && text.length < 50)
+          return _cleanHtmlEntities(text);
+      }
+
+      if (content.contains('<img') ||
+          content.contains('<image') ||
+          content.contains('<svg')) {
+        final textOnly = content
+            .replaceAll(RegExp(r'<[^>]*>'), '')
+            .replaceAll(RegExp(r'\s+'), '')
+            .trim();
+        if (textOnly.length < 100) return "Illustration";
+      }
+
+      final fileName = path.split('/').last.toLowerCase();
+      if (fileName.contains('cover')) return "Cover";
+      if (fileName.contains('title')) return "Title Page";
+    } catch (e) {}
+
+    return "Chapter ${index + 1}";
+  }
+
+  String _cleanHtmlEntities(String text) {
+    return text
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll('&amp;', '&')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
   }
 }

@@ -12,14 +12,12 @@ class LoginViewModel extends ChangeNotifier {
     _setLoading(true);
     _setError(null);
 
-    // Business Logic: Input Validation
     if (email.isEmpty || password.isEmpty) {
       _setError("Please enter both email and password.");
       _setLoading(false);
       return false;
     }
 
-    // Interaction with Model (Service)
     final success = await AuthService().login(email, password);
 
     if (!success) {

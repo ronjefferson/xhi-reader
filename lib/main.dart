@@ -42,7 +42,6 @@ class MyApp extends StatelessWidget {
           title: 'Epub Reader',
           debugShowCheckedModeBanner: false,
 
-          // --- 🟢 LIGHT THEME (YOUR PALETTE) ---
           theme: ThemeData(
             useMaterial3: true,
             brightness: Brightness.light,
@@ -93,29 +92,23 @@ class MyApp extends StatelessWidget {
             ),
           ),
 
-          // --- 🟢 DARK THEME (YOUR NEW PALETTE) ---
           darkTheme: ThemeData(
             useMaterial3: true,
             brightness: Brightness.dark,
 
-            // Background: 18122B
             scaffoldBackgroundColor: const Color(0xFF18122B),
 
-            // Primary/Accent: 635985
             primaryColor: const Color(0xFF635985),
 
             colorScheme: const ColorScheme.dark(
               primary: Color(0xFF635985),
               onPrimary: Colors.white,
-              // Surface: 393053
               surface: Color(0xFF393053),
               onSurface: Colors.white70,
             ),
 
-            // Card Color: 393053
             cardColor: const Color(0xFF393053),
 
-            // Subtle lines using the 443C68 indigo
             dividerColor: const Color(0xFF443C68).withOpacity(0.5),
             dividerTheme: DividerThemeData(
               color: const Color(0xFF443C68).withOpacity(0.5),
@@ -134,7 +127,6 @@ class MyApp extends StatelessWidget {
               backgroundColor: Color(0xFF18122B),
             ),
 
-            // Input Fields: 443C68
             inputDecorationTheme: const InputDecorationTheme(
               filled: true,
               fillColor: Color(0xFF443C68),

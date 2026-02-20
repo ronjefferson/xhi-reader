@@ -55,7 +55,6 @@ class UploadService extends ChangeNotifier {
   }
 
   void addToQueue(File file, {String? knownTitle}) {
-    // 🟢 CLEANUP FIX: Only remove finished tasks if we are re-uploading
     _tasks.removeWhere(
       (t) => t.id == file.path && t.status == UploadStatus.completed,
     );
@@ -96,9 +95,7 @@ class UploadService extends ChangeNotifier {
     try {
       final task = _tasks.firstWhere((t) => t.status == UploadStatus.pending);
       _startUpload(task);
-    } catch (e) {
-      // Queue empty
-    }
+    } catch (e) {}
   }
 
   Future<void> _startUpload(UploadTask task) async {
@@ -114,14 +111,11 @@ class UploadService extends ChangeNotifier {
         if (!file.existsSync()) throw "File not found on device";
 
         final filenameSafe = p.basenameWithoutExtension(file.path);
-        // Note: We skip duplicate check here if we want to allow re-uploads,
-        // but keeping it safe is fine.
         if (_isDuplicate(filenameSafe))
           throw "Book already exists (Name Match)";
 
         final totalBytes = await file.length();
 
-        // 🟢 FIX: Correct Endpoint is /books/ (POST)
         final url = Uri.parse('${ApiService.baseUrl}/books/');
 
         final request = http.MultipartRequest('POST', url);
@@ -138,7 +132,6 @@ class UploadService extends ChangeNotifier {
                 bytesUploaded += data.length;
                 sink.add(data);
 
-                // 🟢 UI THROTTLE: Update every 500ms max
                 if (stopwatch.elapsedMilliseconds > 500) {
                   task.progress = bytesUploaded / totalBytes;
                   notifyListeners();
@@ -164,30 +157,25 @@ class UploadService extends ChangeNotifier {
         final streamedResponse = await request.send();
         final response = await http.Response.fromStream(streamedResponse);
 
-        // 🟢 RETRY LOGIC (401 Unauthorized)
         if (response.statusCode == 401 && !retryMode) {
-          print("UploadService: Token expired. Refreshing...");
           final success = await AuthService().tryRefreshToken();
           if (success) {
             retryMode = true;
-            continue; // Loop again to retry upload
+            continue;
           }
         }
 
-        // 🟢 STATUS CODE FIX: Accept 200 and 201
         if (response.statusCode == 200 || response.statusCode == 201) {
           task.status = UploadStatus.completed;
           task.progress = 1.0;
           notifyListeners();
 
           onUploadCompleted?.call();
-          break; // Exit loop
+          break;
         } else if (response.statusCode == 409) {
           throw "Book already exists";
         } else if (response.statusCode == 400) {
-          // Parse error detail from server if possible
           try {
-            // If server returns {"detail": "Book already exists"}
             if (response.body.contains("already exists")) {
               throw "Book already exists";
             }

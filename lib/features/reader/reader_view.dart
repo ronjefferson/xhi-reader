@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:pdfrx/pdfrx.dart';
@@ -28,7 +29,6 @@ class _ReaderViewState extends State<ReaderView> {
   bool _isLoading = true;
   String? _currentUrl;
 
-  // Slider / Interaction State
   double? _dragValue;
   bool _isInteractingWithSlider = false;
 
@@ -52,7 +52,6 @@ class _ReaderViewState extends State<ReaderView> {
   void _onViewModelUpdate() {
     if (!mounted) return;
 
-    // Block UI updates while dragging slider to prevent jitter
     if (!_isInteractingWithSlider && _dragValue == null) {
       setState(() {});
     }
@@ -64,7 +63,6 @@ class _ReaderViewState extends State<ReaderView> {
       _loadEpubContent(_currentUrl!);
     }
 
-    // PDF Page Jumps
     if (_viewModel.isPdf && _viewModel.requestJumpToPage != null) {
       int targetPage = _viewModel.requestJumpToPage!;
       if (_pageController != null && _pageController!.hasClients) {
@@ -91,14 +89,74 @@ class _ReaderViewState extends State<ReaderView> {
     if (widget.book.isLocal) {
       _webViewController?.loadRequest(uri);
     } else {
-      _webViewController?.loadRequest(uri, headers: _getAuthHeaders());
+      _loadOnlineEpubAsString(uri);
     }
+  }
+
+  /// Fetches the chapter HTML with auth headers in Dart, injects CSS/JS
+  /// directly into the HTML string, then loads it via loadHtmlString —
+  /// identical to what EpubService middleware does for offline books.
+  /// The WebView receives fully-formed HTML so layout is stable on first paint.
+  Future<void> _loadOnlineEpubAsString(Uri uri) async {
+    try {
+      final client = HttpClient();
+      final request = await client.getUrl(uri);
+      _getAuthHeaders().forEach((k, v) => request.headers.set(k, v));
+      final response = await request.close();
+      final bytes = await response.fold<List<int>>(
+        [],
+        (acc, chunk) => acc..addAll(chunk),
+      );
+      client.close();
+
+      final rawHtml = utf8.decode(bytes, allowMalformed: true);
+      final injected = _injectIntoHtml(rawHtml, uri.toString());
+
+      if (mounted) {
+        _webViewController?.loadHtmlString(injected, baseUrl: uri.toString());
+      }
+    } catch (e) {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  String _injectIntoHtml(String html, String baseUrl) {
+    final bool wantEnd = baseUrl.contains('pos=end');
+    final css = _buildCss();
+    final js = _buildJs(wantEnd);
+
+    const metaTag =
+        '<meta name="viewport" content="width=device-width, '
+        'height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">';
+    final cssTag = '<style>$css</style>';
+    final jsTag = '<script>$js</script>';
+
+    String modified = html;
+
+    if (modified.contains('<head>')) {
+      modified = modified.replaceFirst('<head>', '<head>$metaTag$cssTag');
+    } else {
+      modified = '<head>$metaTag$cssTag</head>$modified';
+    }
+
+    // Wrap body content — jsTag goes at end of body so DOM is ready when it runs
+    if (modified.contains('<body')) {
+      modified = modified.replaceFirstMapped(
+        RegExp(r'<body[^>]*>', caseSensitive: false),
+        (m) => '${m.group(0)}<div id="viewer">',
+      );
+      modified = modified.replaceFirst('</body>', '</div>$jsTag</body>');
+    } else {
+      modified = '<body><div id="viewer">$modified</div>$jsTag</body>';
+    }
+
+    return modified;
   }
 
   void _startLoading() {
     setState(() => _isLoading = true);
     _spinnerSafetyTimer?.cancel();
-    _spinnerSafetyTimer = Timer(const Duration(seconds: 3), () {
+    _spinnerSafetyTimer = Timer(const Duration(seconds: 10), () {
       if (mounted && _isLoading) setState(() => _isLoading = false);
     });
   }
@@ -123,6 +181,261 @@ class _ReaderViewState extends State<ReaderView> {
     _webViewController?.runJavaScript(
       'if(window.setTheme) window.setTheme($isDark);',
     );
+  }
+
+  String _buildCss() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bgHex = isDark ? '#121212' : '#ffffff';
+    final textHex = isDark ? '#e0e0e0' : '#000000';
+
+    // Matches reader.css exactly — the CSS that works for offline books.
+    // Body layout is overridden in JS anyway, so this is just the baseline.
+    return '''
+      * { box-sizing: border-box; }
+      html {
+        height: 100vh !important;
+        width: 100vw !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        background-color: $bgHex !important;
+        touch-action: none !important;
+      }
+      body {
+        height: calc(100vh - 80px) !important;
+        width: 100vw !important;
+        margin-top: 40px !important;
+        margin-bottom: 40px !important;
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+        overflow: visible !important;
+        padding: 0 !important;
+        border: none !important;
+        column-width: 100vw !important;
+        column-gap: 0px !important;
+        column-fill: auto !important;
+        color: $textHex !important;
+        font-family: sans-serif !important;
+        font-size: 18px !important;
+        line-height: 1.6 !important;
+        text-align: justify;
+        will-change: transform;
+        backface-visibility: hidden;
+        visibility: hidden;
+      }
+      p, h1, h2, h3, h4, h5, h6, li, blockquote, dd, dt {
+        margin-left: 20px !important;
+        margin-right: 20px !important;
+      }
+      img, svg, image {
+        max-width: calc(100vw - 40px) !important;
+        max-height: 100% !important;
+        object-fit: contain !important;
+        display: block !important;
+        margin: 0 auto !important;
+      }
+      #viewer { display: contents; }
+      html.dark-mode { background-color: #121212 !important; }
+      body.dark-mode { color: #e0e0e0 !important; background-color: #121212 !important; }
+      html.dark-mode img { opacity: 0.85 !important; }
+    ''';
+  }
+
+  String _buildJs(bool wantEnd) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final token = AuthService().token ?? '';
+
+    return '''
+      (function() {
+        if (window.didInit) return; window.didInit = true;
+
+        function post(msg) { if (window.PrintReader) window.PrintReader.postMessage(msg); }
+        function W() { return document.documentElement.clientWidth || window.innerWidth; }
+
+        // _totalSW is cached ONCE before any transform is applied.
+        // After setX() is called, document.body.scrollWidth collapses on Android
+        // WebView. All page math must use this cached value.
+        var _totalSW = 0;
+
+        var s = document.body.style;
+        s.height               = (window.innerHeight - 80) + 'px';
+        s.width                = '100vw';
+        s.margin               = '40px 0';
+        s.padding              = '0';
+        s.columnWidth          = '100vw';
+        s.columnGap            = '0';
+        s.columnFill           = 'auto';
+        s.willChange           = 'transform';
+        s.webkitBackfaceVisibility = 'hidden';
+        s.backfaceVisibility   = 'hidden';
+        s.overflow             = 'visible';
+
+        document.documentElement.style.overflow = 'hidden';
+        document.documentElement.style.height   = '100vh';
+        document.documentElement.style.width    = '100vw';
+
+        var curX = 0;
+        function setX(x) {
+          curX = x;
+          document.body.style.transform = 'translate3d(' + (-x) + 'px, 0, 0)';
+        }
+
+        window.setTheme = function(isDark) {
+          var fn = isDark ? 'add' : 'remove';
+          document.documentElement.classList[fn]('dark-mode');
+          document.body.classList[fn]('dark-mode');
+        };
+        window.setTheme($isDark);
+
+        function fixImages() {
+          var token = '$token';
+          var imgs = document.getElementsByTagName('img');
+          for (var i = 0; i < imgs.length; i++) {
+            var src = imgs[i].src;
+            if (src.indexOf('localhost') > -1 || src.indexOf('127.0.0.1') > -1)
+              src = src.replace('localhost', '10.0.2.2').replace('127.0.0.1', '10.0.2.2');
+            if (src.indexOf('/Images/') > -1)
+              src = src.replace('/Images/', '/images/');
+            if (token && src.indexOf('token=') === -1 && src.startsWith('http'))
+              src += (src.indexOf('?') > -1 ? '&' : '?') + 'token=' + token;
+            imgs[i].src = src;
+          }
+        }
+
+        function init() {
+          fixImages();
+          setTimeout(fixImages, 500);
+
+          // Cache scrollWidth BEFORE any setX() call.
+          // This is the only moment it is reliable.
+          _totalSW = document.body.scrollWidth;
+
+          var w = W();
+          var targetX = ${wantEnd ? 'true' : 'false'} ? (_totalSW - w) : 0;
+          // Snap to exact page boundary
+          targetX = Math.round(targetX / w) * w;
+          targetX = Math.max(0, Math.min(_totalSW - w, targetX));
+          setX(targetX);
+
+          document.body.style.visibility = 'visible';
+
+          var pageCount = Math.max(1, Math.round(_totalSW / w));
+          post('page_count:' + pageCount);
+
+          setTimeout(function() { post('ready'); }, 100);
+        }
+
+        window.scrollToPercent = function(percent) {
+          var w = W();
+          // Use cached _totalSW — SW() is unreliable after transform is applied
+          var total  = _totalSW - w;
+          var target = Math.round((total * percent) / w) * w;
+          target = Math.max(0, Math.min(total, target));
+          setX(target);
+        };
+
+        var startX    = 0;
+        var startY    = 0;
+        var startPage = 0;
+        var dragging  = false;
+
+        window.addEventListener('touchstart', function(e) {
+          startX = e.touches[0].clientX;
+          startY = e.touches[0].clientY;
+          // Use cached _totalSW so startPage is correct even after transform
+          var w = W();
+          var maxPage = Math.max(0, Math.round(_totalSW / w) - 1);
+          startPage = Math.max(0, Math.min(maxPage, Math.round(curX / w)));
+          dragging = true;
+          window._snapCancel = true;
+        }, { passive: true });
+
+        window.addEventListener('touchmove', function(e) {
+          if (!dragging) return;
+          var diff    = startX - e.touches[0].clientX;
+          var w       = W();
+          var targetX = startPage * w + diff;
+          // Allow slight overscroll for chapter-flip feel, clamp to ±1 page
+          setX(Math.max(-w, Math.min(_totalSW, targetX)));
+        }, { passive: true });
+
+        function onTouchEnd(e) {
+          if (!dragging) return;
+          dragging = false;
+
+          var w       = W();
+          var touch   = e.changedTouches ? e.changedTouches[0] : e.touches[0];
+          var clientX = touch ? touch.clientX : startX;
+          var clientY = touch ? touch.clientY : startY;
+          var diffX   = startX - clientX;
+          var diffY   = startY - clientY;
+
+          // Tap
+          if (Math.abs(diffX) < 10 && Math.abs(diffY) < 10) {
+            post('toggle_controls');
+            var maxP   = Math.max(0, Math.round(_totalSW / w) - 1);
+            var validP = Math.max(0, Math.min(maxP, startPage));
+            snapTo(validP * w);
+            return;
+          }
+
+          var maxX = _totalSW - w;
+
+          // Chapter boundary detection by overscroll (same as reader.js)
+          if (curX < -w * 0.15) {
+            snapTo(-w);
+            setTimeout(function() { post('prev_chapter'); }, 250);
+            return;
+          }
+          if (curX > maxX + w * 0.15) {
+            snapTo(_totalSW);
+            setTimeout(function() { post('next_chapter'); }, 250);
+            return;
+          }
+
+          var targetPage = startPage;
+          if (diffX > 50)       targetPage = startPage + 1;
+          else if (diffX < -50) targetPage = startPage - 1;
+
+          var maxPage = Math.max(0, Math.round(_totalSW / w) - 1);
+          targetPage  = Math.max(0, Math.min(maxPage, targetPage));
+          snapTo(targetPage * w);
+        }
+
+        window.addEventListener('touchend',    onTouchEnd, { passive: true });
+        window.addEventListener('touchcancel', onTouchEnd, { passive: true });
+
+        function snapTo(targetX) {
+          window._snapCancel = false;
+          var from = curX;
+          var dist = targetX - from;
+          if (Math.abs(dist) < 1) { setX(targetX); reportProgress(targetX); return; }
+
+          var startTime = null;
+          function step(ts) {
+            if (window._snapCancel) return;
+            if (!startTime) startTime = ts;
+            var p    = Math.min((ts - startTime) / 250, 1);
+            var ease = 1 - Math.pow(1 - p, 3);
+            setX(from + dist * ease);
+            if (p < 1) requestAnimationFrame(step);
+            else { setX(targetX); reportProgress(targetX); }
+          }
+          requestAnimationFrame(step);
+        }
+
+        function reportProgress(x) {
+          var w         = W();
+          var pageCount = Math.max(1, Math.round(_totalSW / w));
+          var maxX      = (pageCount - 1) * w;
+          var valid     = Math.max(0, Math.min(maxX, x));
+          post('progress:' + (maxX > 0 ? valid / maxX : 1));
+        }
+
+        window.addEventListener('load', function() { init(); });
+
+      })();
+    ''';
   }
 
   @override
@@ -167,7 +480,6 @@ class _ReaderViewState extends State<ReaderView> {
               ),
             ),
 
-          // Top bar
           AnimatedPositioned(
             duration: const Duration(milliseconds: 200),
             top: _showControls ? 0 : -100,
@@ -208,7 +520,6 @@ class _ReaderViewState extends State<ReaderView> {
             ),
           ),
 
-          // Bottom bar
           AnimatedPositioned(
             duration: const Duration(milliseconds: 200),
             bottom: _showControls ? 0 : -160,
@@ -289,7 +600,6 @@ class _ReaderViewState extends State<ReaderView> {
                                 ? null
                                 : (val) {
                                     _viewModel.jumpToGlobalPage(val.toInt());
-                                    // Delay releasing slider lock to prevent jumping
                                     Future.delayed(
                                       const Duration(milliseconds: 800),
                                       () {
@@ -364,25 +674,22 @@ class _ReaderViewState extends State<ReaderView> {
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageFinished: (url) {
-            if (!_viewModel.isPdf) {
-              if (widget.book.isLocal) {
-                // LOCAL LOGIC
-                _applyTheme();
-                _webViewController?.runJavaScript(
-                  'if(window.fixImages) window.fixImages();',
-                );
-                if (_viewModel.requestScrollToProgress != null) {
-                  _executeEpubScroll(_viewModel.requestScrollToProgress!);
-                  _viewModel.requestScrollToProgress = null;
-                }
-                Future.delayed(const Duration(milliseconds: 150), () {
-                  if (mounted) setState(() => _isLoading = false);
-                });
-              } else {
-                // ONLINE LOGIC (New Fixed Version)
-                _injectAssets();
+            if (!_viewModel.isPdf && widget.book.isLocal) {
+              // Offline: JS already baked in by EpubService middleware.
+              _applyTheme();
+              _webViewController?.runJavaScript(
+                'if(window.fixImages) window.fixImages();',
+              );
+              if (_viewModel.requestScrollToProgress != null) {
+                _executeEpubScroll(_viewModel.requestScrollToProgress!);
+                _viewModel.requestScrollToProgress = null;
               }
+              Future.delayed(const Duration(milliseconds: 150), () {
+                if (mounted) setState(() => _isLoading = false);
+              });
             }
+            // Online: JS is baked into the HTML string. The JS 'load' event
+            // fires 'ready' itself — nothing to do here.
           },
           onWebResourceError: (error) {
             if (mounted) setState(() => _isLoading = false);
@@ -402,13 +709,13 @@ class _ReaderViewState extends State<ReaderView> {
   void _handleJsMessage(String message) {
     if (message == 'ready') {
       _spinnerSafetyTimer?.cancel();
-      _applyTheme();
-      // Handle delayed scroll requests
-      if (_viewModel.requestScrollToProgress != null) {
-        _executeEpubScroll(_viewModel.requestScrollToProgress!);
-        _viewModel.requestScrollToProgress = null;
-      }
-      Future.delayed(const Duration(milliseconds: 100), () {
+      // NOTE: we do NOT call scrollToPercent here for online books.
+      // The JS load event already handles initial positioning using _forceEnd
+      // (for prev chapter → last page) or targetX=0 (for next chapter → first page).
+      // Calling scrollToPercent after the transform is set breaks scrollWidth reading.
+      // requestScrollToProgress is only used by the offline reader via onPageFinished.
+      _viewModel.requestScrollToProgress = null;
+      Future.delayed(const Duration(milliseconds: 150), () {
         if (mounted) setState(() => _isLoading = false);
       });
     } else if (message == 'toggle_controls') {
@@ -417,229 +724,21 @@ class _ReaderViewState extends State<ReaderView> {
       _viewModel.nextChapter();
     } else if (message == 'prev_chapter') {
       _viewModel.previousChapter();
+    } else if (message.startsWith('page_count:')) {
+      final count = int.tryParse(message.split(':')[1]);
+      if (count != null) {
+        _viewModel.updateChapterPageCount(
+          _viewModel.currentChapterIndex,
+          count,
+        );
+      }
     } else if (message.startsWith('progress:')) {
       if (!_isInteractingWithSlider) {
         final val = double.tryParse(message.split(':')[1]) ?? 0.0;
         _viewModel.updateEpubScrollProgress(val);
-        setState(() {}); // Immediate update
+        setState(() {});
       }
     }
-  }
-
-  // ---------------------------------------------------------
-  // THE FIXED ONLINE READER ASSETS
-  // ---------------------------------------------------------
-  void _injectAssets() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bgHex = isDark ? '#18122B' : '#FCF8F8';
-    final textHex = isDark ? '#E8E0F0' : '#1A1A1A';
-    final token = AuthService().token ?? '';
-    final apiBaseUrl = ApiService.baseUrl;
-    final bool wantEnd = _viewModel.epubUrl?.contains('pos=end') ?? false;
-
-    const String rawCss = r'''
-      * { box-sizing: border-box; }
-      html { height: 100vh; width: 100vw; overflow: hidden; margin: 0; padding: 0; touch-action: none; background-color: #ffffff; }
-      body { 
-        visibility: hidden; /* Default hidden until JS enables it */
-        height: calc(100vh - 80px); width: 100vw; margin: 40px 0; padding: 0;
-        column-width: 100vw; column-gap: 0px; column-fill: auto;
-        font-family: sans-serif; font-size: 18px; line-height: 1.6; text-align: justify;
-        will-change: transform; backface-visibility: hidden; overflow: visible;
-      }
-      p, h1, h2, h3, h4, h5, h6, li, blockquote, dd, dt { margin-left: 20px; margin-right: 20px; }
-      img, svg { max-width: calc(100vw - 40px); max-height: 100%; object-fit: contain; display: block; margin: 0 auto; }
-      #reading-anchor { display: inline-block; width: 1px; height: 1px; }
-      html.dark-mode { background-color: #18122B !important; }
-      body.dark-mode { color: #E8E0F0 !important; background-color: #18122B !important; }
-    ''';
-
-    const String rawJs = r'''
-      (function() {
-        if(window.didInit) return; window.didInit = true;
-        function post(msg) { if (window.PrintReader) window.PrintReader.postMessage(msg); }
-        function W()  { return document.documentElement.clientWidth; }
-        
-        var anchor = document.createElement('span');
-        anchor.id = 'reading-anchor'; anchor.innerHTML = '&nbsp;'; 
-        document.body.appendChild(anchor);
-
-        var curX = 0;
-        function setX(x) {
-          curX = x;
-          document.body.style.transform = 'translate3d(' + (-x) + 'px, 0, 0)';
-        }
-
-        window.setTheme = function(isDark) {
-          var fn = isDark ? 'add' : 'remove';
-          document.documentElement.classList[fn]('dark-mode');
-          document.body.classList[fn]('dark-mode');
-        };
-
-        function init() {
-          var params = new URLSearchParams(window.location.search);
-          var forceEnd = (params.get('pos') === 'end' || window._forceEnd === true);
-          var lastAnchorX = -1, stability = 0;
-          
-          var check = setInterval(function() {
-            var rect = anchor.getBoundingClientRect();
-            var currentAnchorX = rect.left + curX; 
-            
-            if (currentAnchorX > 0 && Math.abs(currentAnchorX - lastAnchorX) < 1) stability++;
-            else stability = 0;
-            lastAnchorX = currentAnchorX;
-
-            if (stability >= 5) { 
-              clearInterval(check);
-              var screen = W();
-              var maxIdx = Math.max(0, Math.ceil((currentAnchorX + 10) / screen) - 1);
-              
-              var targetX = forceEnd ? maxIdx * screen : 0;
-              setX(targetX);
-
-              // 🟢 STICKY END LOGIC:
-              // If we are supposed to be at the end, keep checking for content growth (images/fonts).
-              // If the page grows, snap to the NEW end immediately.
-              if (forceEnd) {
-                 var retries = 0;
-                 var reCheck = setInterval(function() {
-                    var newRect = anchor.getBoundingClientRect();
-                    var newTotal = newRect.left + curX;
-                    var newMax = Math.max(0, Math.ceil((newTotal + 10) / screen) - 1);
-                    // If content grew beyond current view, update view
-                    if (newMax * screen > curX) {
-                       setX(newMax * screen);
-                    }
-                    retries++;
-                    if(retries > 20) clearInterval(reCheck); // Stop checking after 2 seconds
-                 }, 100);
-              }
-
-              // 🟢 DOUBLE FRAME DELAY:
-              // Ensure the translation renders physically before making body visible.
-              // Prevents the "Random Page" flash.
-              requestAnimationFrame(function() {
-                 requestAnimationFrame(function() {
-                    document.body.style.visibility = 'visible';
-                    post('ready');
-                    report(targetX);
-                 });
-              });
-            }
-          }, 80);
-        }
-
-        var startX=0, startCurX=0, dragging=false;
-        
-        window.addEventListener('touchstart', function(e) {
-          startX = e.touches[0].clientX;
-          startCurX = curX; 
-          dragging = true;
-          window._snapCancel = true;
-        }, {passive:true});
-        
-        window.addEventListener('touchmove', function(e) {
-          if(!dragging) return;
-          var delta = startX - e.touches[0].clientX;
-          setX(startCurX + delta); 
-        }, {passive:true});
-        
-        window.addEventListener('touchend', function(e) {
-          if(!dragging) return; dragging = false;
-          var w = W();
-          var diffX = startX - e.changedTouches[0].clientX;
-          
-          var rect = anchor.getBoundingClientRect();
-          var totalWidth = rect.left + curX;
-          var maxIdx = Math.max(0, Math.ceil((totalWidth + 10) / w) - 1);
-
-          if(Math.abs(diffX) < 10) { 
-             var currentIdx = Math.round(startCurX / w);
-             snapTo(currentIdx * w); 
-             post('toggle_controls'); 
-             return; 
-          }
-          
-          var direction = 0;
-          if (diffX > 50) direction = 1;
-          else if (diffX < -50) direction = -1;
-
-          var targetIdx;
-          if (direction === 0) {
-             targetIdx = Math.round(startCurX / w);
-          } else {
-             targetIdx = Math.round(startCurX / w) + direction;
-          }
-
-          if (targetIdx > maxIdx) { post('next_chapter'); return; }
-          if (targetIdx < 0) { post('prev_chapter'); return; }
-
-          snapTo(targetIdx * w);
-        });
-
-        function snapTo(targetX) {
-          window._snapCancel = false;
-          var from = curX, dist = targetX - from;
-          if (Math.abs(dist) < 1) { setX(targetX); report(targetX); return; }
-          
-          var startTime = null;
-          function step(ts) {
-            if (window._snapCancel) return;
-            if (!startTime) startTime = ts;
-            var p = Math.min((ts - startTime) / 250, 1);
-            setX(from + dist * (1 - Math.pow(1 - p, 3)));
-            if (p < 1) requestAnimationFrame(step);
-            else { setX(targetX); report(targetX); }
-          }
-          requestAnimationFrame(step);
-        }
-
-        function report(x) {
-          var rect = anchor.getBoundingClientRect();
-          var total = rect.left + curX - W();
-          if (total <= 1) { post('progress:1'); return; }
-          post('progress:' + (x / total));
-        }
-
-        init();
-      })();
-    ''';
-
-    const String compatJs = r'''
-      window.scrollToPercent = function(pct) {
-        var screen = document.documentElement.clientWidth;
-        var anchor = document.getElementById('reading-anchor');
-        if(anchor) {
-           var rect = anchor.getBoundingClientRect();
-           var style = window.getComputedStyle(document.body);
-           var matrix = new WebKitCSSMatrix(style.transform);
-           var curX = -matrix.m41; 
-           var total = rect.left + curX - screen;
-           if (total > 0) {
-              var target = pct * total;
-              target = Math.round(target / screen) * screen;
-              document.body.style.transform = 'translate3d(' + (-target) + 'px, 0, 0)';
-           }
-        }
-      };
-    ''';
-
-    final String jsB64 = base64Encode(utf8.encode(rawJs + compatJs));
-    final String cssB64 = base64Encode(utf8.encode(rawCss));
-
-    _webViewController?.runJavaScript('''
-      window._tok = "$token";
-      window._base = "$apiBaseUrl";
-      window._forceEnd = $wantEnd;
-      var st = document.createElement('style');
-      st.innerHTML = decodeURIComponent(escape(window.atob('$cssB64')));
-      document.head.appendChild(st);
-      document.body.style.backgroundColor = "$bgHex";
-      document.body.style.color = "$textHex";
-      var sc = document.createElement('script');
-      sc.innerHTML = decodeURIComponent(escape(window.atob('$jsB64')));
-      document.head.appendChild(sc);
-    ''');
   }
 
   void _showChapterList() {

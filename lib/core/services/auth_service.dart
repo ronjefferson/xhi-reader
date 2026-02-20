@@ -28,7 +28,6 @@ class AuthService {
     _username = prefs.getString('username');
   }
 
-  /// --- REGISTER (New) ---
   Future<String?> register(String email, String password) async {
     final url = Uri.parse('${ApiService.baseUrl}/register');
 
@@ -36,16 +35,15 @@ class AuthService {
       final response = await http.post(
         url,
         headers: {
-          'Content-Type': 'application/json', // 🟢 REQUIRED by backend
+          'Content-Type': 'application/json',
           'ngrok-skip-browser-warning': 'true',
         },
         body: jsonEncode({'email': email, 'password': password}),
       );
 
       if (response.statusCode == 200) {
-        return null; // Success (No error message)
+        return null;
       } else {
-        // Return the error message from the backend (e.g., "Email already registered")
         final data = jsonDecode(response.body);
         return data['detail'] ?? "Registration failed";
       }
@@ -54,7 +52,6 @@ class AuthService {
     }
   }
 
-  /// --- LOGIN ---
   Future<bool> login(String username, String password) async {
     final url = Uri.parse('${ApiService.baseUrl}/token');
 
@@ -90,7 +87,6 @@ class AuthService {
     }
   }
 
-  /// --- LOGOUT ---
   Future<void> logout() async {
     _token = null;
     _refreshToken = null;
@@ -102,7 +98,6 @@ class AuthService {
     await prefs.remove('username');
   }
 
-  /// --- REFRESH TOKEN ---
   Future<bool> tryRefreshToken() async {
     if (_refreshToken == null) {
       _sessionExpiredController.add(true);

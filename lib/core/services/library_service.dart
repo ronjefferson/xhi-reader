@@ -20,11 +20,9 @@ class LibraryService {
 
   static const String _appFolderName = "MyReaderData";
 
-  // Cache
   List<BookModel> _loadedBooks = [];
   List<BookModel> get loadedBooks => _loadedBooks;
 
-  // --- PERMISSIONS ---
   Future<bool> requestPermission() async {
     if (await Permission.manageExternalStorage.isGranted) return true;
     if (await Permission.storage.isGranted) return true;
@@ -40,7 +38,6 @@ class LibraryService {
     return dir;
   }
 
-  // --- PROGRESS TRACKING ---
   Future<void> saveProgress(
     String bookId,
     int chapterIndex,
@@ -96,7 +93,6 @@ class LibraryService {
     return updatedBooks;
   }
 
-  // --- MAIN SCAN METHOD ---
   Future<List<BookModel>> scanForEpubs({bool forceRefresh = false}) async {
     if (!await requestPermission()) return [];
 
@@ -104,7 +100,6 @@ class LibraryService {
     final Set<String> seenPaths = {};
     List<BookModel> books = [];
 
-    // 1. Scan Public Downloads (Auto-Scan)
     final publicBooks = await _scanPublicDownloads(
       prefs,
       seenPaths,
@@ -112,7 +107,6 @@ class LibraryService {
     );
     books.addAll(publicBooks);
 
-    // 2. Scan App Documents (Internal Storage for Imported Books)
     final privateBooks = await _scanAppDocuments(prefs, seenPaths);
     books.addAll(privateBooks);
 
@@ -133,10 +127,6 @@ class LibraryService {
     return processedBooks;
   }
 
-  // --- SCANNERS ---
-
-  // 🟢 SCANNER 1: PUBLIC DOWNLOADS (Auto-Scan)
-  // FIXED: Only scans EPUBs. Ignores PDFs.
   Future<List<BookModel>> _scanPublicDownloads(
     SharedPreferences prefs,
     Set<String> seenPaths,
@@ -155,8 +145,6 @@ class LibraryService {
         for (var entity in files) {
           if (entity is File) {
             final ext = p.extension(entity.path).toLowerCase();
-
-            // 🟢 FIX: RESTRICT TO EPUB ONLY FOR AUTO-SCAN
             if (ext != '.epub') continue;
 
             if (seenPaths.contains(entity.path)) continue;
@@ -188,7 +176,6 @@ class LibraryService {
             }
 
             if (needsProcessing || forceRefresh) {
-              // Only EPUB extraction needed here
               await _extractEpubCover(entity, coverFile);
             }
 
@@ -217,8 +204,6 @@ class LibraryService {
     return found;
   }
 
-  // 🟢 SCANNER 2: INTERNAL STORAGE (Imported Books)
-  // Must allow PDF to find books you manually imported.
   Future<List<BookModel>> _scanAppDocuments(
     SharedPreferences prefs,
     Set<String> seenPaths,
@@ -239,7 +224,6 @@ class LibraryService {
           for (var f in folderFiles) {
             if (f is File) {
               final ext = p.extension(f.path).toLowerCase();
-              // 🟢 ALLOW BOTH: This finds the files you manually imported
               if (ext == '.epub' || ext == '.pdf') bookFile = f;
               if (p.basename(f.path).contains('cover')) coverFile = f;
             }
@@ -275,12 +259,10 @@ class LibraryService {
     return found;
   }
 
-  // --- EXPLICIT IMPORT ---
-  // Allows picking both EPUB and PDF
   Future<void> importPdf() async {
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['epub', 'pdf'], // 🟢 User picks explicitly
+      allowedExtensions: ['epub', 'pdf'],
     );
 
     if (result != null && result.files.single.path != null) {
@@ -295,13 +277,11 @@ class LibraryService {
       }
 
       final ext = p.extension(originalFile.path).toLowerCase();
-      // Copy the file to internal storage
       final savedFile = await originalFile.copy(
         '${bookDataDir.path}/$fileName$ext',
       );
       final coverFile = File('${bookDataDir.path}/cover.png');
 
-      // 🟢 Generate cover based on type
       if (ext == '.epub') {
         await _extractEpubCover(savedFile, coverFile);
       } else if (ext == '.pdf') {

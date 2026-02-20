@@ -6,7 +6,6 @@ class SettingsView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Listen to changes for UI update
     return AnimatedBuilder(
       animation: ThemeService(),
       builder: (context, _) {

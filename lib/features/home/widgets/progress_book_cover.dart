@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 class ProgressBookCover extends StatelessWidget {
   final double progress;
-  final bool isUploading; // 🟢 Kept this new parameter
+  final bool isUploading; // 🟢 Show upload icon if true
   final Widget Function() imageBuilder;
 
   const ProgressBookCover({
@@ -14,14 +14,13 @@ class ProgressBookCover extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Queued if 0.0, Finished if 1.0
     final bool isQueued = progress <= 0.0;
     final bool isDone = progress >= 1.0;
 
     return Stack(
       fit: StackFit.expand,
       children: [
-        // LAYER 1: Background (Grayscale)
+        // LAYER 1: Grayscale background
         ColorFiltered(
           colorFilter: const ColorFilter.mode(
             Colors.grey,
@@ -30,21 +29,20 @@ class ProgressBookCover extends StatelessWidget {
           child: imageBuilder(),
         ),
 
-        // LAYER 2: Foreground (Color) - Clipped (The Animation)
+        // LAYER 2: Foreground colored clipped by progress
         ClipRect(
           clipper: _ProgressBarClipper(isQueued ? 0.0 : progress),
           child: imageBuilder(),
         ),
 
-        // LAYER 3: Dark Overlay (Make text pop)
+        // LAYER 3: Semi-transparent overlay
         Container(color: Colors.black26),
 
-        // LAYER 4: Status Text & Icon
+        // LAYER 4: Status icon and progress text
         Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // 🟢 DYNAMIC ICON LOGIC
               Icon(
                 isDone
                     ? Icons.check_circle
@@ -52,13 +50,11 @@ class ProgressBookCover extends StatelessWidget {
                           ? Icons.hourglass_empty
                           : (isUploading
                                 ? Icons.cloud_upload
-                                : Icons.download)), // 🟢 Swap here
+                                : Icons.download)),
                 color: isDone ? Colors.greenAccent : Colors.white,
-                size: 28, // Bumped size slightly for visibility
+                size: 28,
               ),
               const SizedBox(height: 4),
-
-              // Status Pill
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
@@ -84,7 +80,6 @@ class ProgressBookCover extends StatelessWidget {
   }
 }
 
-// 🟢 RESTORED CLIPPER CLASS
 class _ProgressBarClipper extends CustomClipper<Rect> {
   final double progress;
 

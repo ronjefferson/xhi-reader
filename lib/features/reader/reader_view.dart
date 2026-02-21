@@ -93,10 +93,6 @@ class _ReaderViewState extends State<ReaderView> {
     }
   }
 
-  /// Fetches the chapter HTML with auth headers in Dart, injects CSS/JS
-  /// directly into the HTML string, then loads it via loadHtmlString —
-  /// identical to what EpubService middleware does for offline books.
-  /// The WebView receives fully-formed HTML so layout is stable on first paint.
   Future<void> _loadOnlineEpubAsString(Uri uri) async {
     try {
       final client = HttpClient();
@@ -139,7 +135,6 @@ class _ReaderViewState extends State<ReaderView> {
       modified = '<head>$metaTag$cssTag</head>$modified';
     }
 
-    // Wrap body content — jsTag goes at end of body so DOM is ready when it runs
     if (modified.contains('<body')) {
       modified = modified.replaceFirstMapped(
         RegExp(r'<body[^>]*>', caseSensitive: false),
@@ -188,8 +183,6 @@ class _ReaderViewState extends State<ReaderView> {
     final bgHex = isDark ? '#121212' : '#ffffff';
     final textHex = isDark ? '#e0e0e0' : '#000000';
 
-    // Matches reader.css exactly — the CSS that works for offline books.
-    // Body layout is overridden in JS anyway, so this is just the baseline.
     return '''
       * { box-sizing: border-box; }
       html {
@@ -252,9 +245,6 @@ class _ReaderViewState extends State<ReaderView> {
         function post(msg) { if (window.PrintReader) window.PrintReader.postMessage(msg); }
         function W() { return document.documentElement.clientWidth || window.innerWidth; }
 
-        // _totalSW is cached ONCE before any transform is applied.
-        // After setX() is called, document.body.scrollWidth collapses on Android
-        // WebView. All page math must use this cached value.
         var _totalSW = 0;
 
         var s = document.body.style;
@@ -306,13 +296,10 @@ class _ReaderViewState extends State<ReaderView> {
           fixImages();
           setTimeout(fixImages, 500);
 
-          // Cache scrollWidth BEFORE any setX() call.
-          // This is the only moment it is reliable.
           _totalSW = document.body.scrollWidth;
 
           var w = W();
           var targetX = ${wantEnd ? 'true' : 'false'} ? (_totalSW - w) : 0;
-          // Snap to exact page boundary
           targetX = Math.round(targetX / w) * w;
           targetX = Math.max(0, Math.min(_totalSW - w, targetX));
           setX(targetX);
@@ -327,7 +314,6 @@ class _ReaderViewState extends State<ReaderView> {
 
         window.scrollToPercent = function(percent) {
           var w = W();
-          // Use cached _totalSW — SW() is unreliable after transform is applied
           var total  = _totalSW - w;
           var target = Math.round((total * percent) / w) * w;
           target = Math.max(0, Math.min(total, target));
@@ -342,7 +328,6 @@ class _ReaderViewState extends State<ReaderView> {
         window.addEventListener('touchstart', function(e) {
           startX = e.touches[0].clientX;
           startY = e.touches[0].clientY;
-          // Use cached _totalSW so startPage is correct even after transform
           var w = W();
           var maxPage = Math.max(0, Math.round(_totalSW / w) - 1);
           startPage = Math.max(0, Math.min(maxPage, Math.round(curX / w)));
@@ -355,7 +340,6 @@ class _ReaderViewState extends State<ReaderView> {
           var diff    = startX - e.touches[0].clientX;
           var w       = W();
           var targetX = startPage * w + diff;
-          // Allow slight overscroll for chapter-flip feel, clamp to ±1 page
           setX(Math.max(-w, Math.min(_totalSW, targetX)));
         }, { passive: true });
 
@@ -370,7 +354,6 @@ class _ReaderViewState extends State<ReaderView> {
           var diffX   = startX - clientX;
           var diffY   = startY - clientY;
 
-          // Tap
           if (Math.abs(diffX) < 10 && Math.abs(diffY) < 10) {
             post('toggle_controls');
             var maxP   = Math.max(0, Math.round(_totalSW / w) - 1);
@@ -381,7 +364,6 @@ class _ReaderViewState extends State<ReaderView> {
 
           var maxX = _totalSW - w;
 
-          // Chapter boundary detection by overscroll (same as reader.js)
           if (curX < -w * 0.15) {
             snapTo(-w);
             setTimeout(function() { post('prev_chapter'); }, 250);
@@ -675,7 +657,6 @@ class _ReaderViewState extends State<ReaderView> {
         NavigationDelegate(
           onPageFinished: (url) {
             if (!_viewModel.isPdf && widget.book.isLocal) {
-              // Offline: JS already baked in by EpubService middleware.
               _applyTheme();
               _webViewController?.runJavaScript(
                 'if(window.fixImages) window.fixImages();',
@@ -688,8 +669,6 @@ class _ReaderViewState extends State<ReaderView> {
                 if (mounted) setState(() => _isLoading = false);
               });
             }
-            // Online: JS is baked into the HTML string. The JS 'load' event
-            // fires 'ready' itself — nothing to do here.
           },
           onWebResourceError: (error) {
             if (mounted) setState(() => _isLoading = false);
@@ -709,11 +688,6 @@ class _ReaderViewState extends State<ReaderView> {
   void _handleJsMessage(String message) {
     if (message == 'ready') {
       _spinnerSafetyTimer?.cancel();
-      // NOTE: we do NOT call scrollToPercent here for online books.
-      // The JS load event already handles initial positioning using _forceEnd
-      // (for prev chapter → last page) or targetX=0 (for next chapter → first page).
-      // Calling scrollToPercent after the transform is set breaks scrollWidth reading.
-      // requestScrollToProgress is only used by the offline reader via onPageFinished.
       _viewModel.requestScrollToProgress = null;
       Future.delayed(const Duration(milliseconds: 150), () {
         if (mounted) setState(() => _isLoading = false);

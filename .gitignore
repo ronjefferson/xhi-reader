@@ -11,6 +11,7 @@
 .svn/
 .swiftpm/
 migrate_working_dir/
+.vscode/
 
 # IntelliJ related
 *.iml
@@ -43,3 +44,12 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Android Release Signing Keys
+android/key.properties
+android/app/upload-keystore.jks
+*.jks
+*.keystore
+
+# Environment Variables
+.env
